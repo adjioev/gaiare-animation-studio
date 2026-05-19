@@ -5,6 +5,7 @@
 // proxy commands so the API token never enters the JS bundle.
 
 mod replicate;
+mod safe_path;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -12,7 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use replicate::{
     replicate_cancel_prediction, replicate_create_prediction, replicate_get_prediction,
+    replicate_upload_file,
 };
+use safe_path::assert_safe_document_path_cmd;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 
@@ -245,6 +248,8 @@ pub fn run() {
             replicate_create_prediction,
             replicate_get_prediction,
             replicate_cancel_prediction,
+            replicate_upload_file,
+            assert_safe_document_path_cmd,
             arm_quit,
             force_quit,
             cancel_quit,

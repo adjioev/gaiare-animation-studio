@@ -8,12 +8,34 @@
 //! owns the poll loop, status callbacks, and abort logic. We just
 //! relay the HTTPS call so the token stays in this process.
 
+use std::path::Path;
+
+use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::fs;
 use url::Url;
+
+use crate::safe_path::assert_safe_document_path;
 
 const REPLICATE_HOST: &str = "api.replicate.com";
 const REPLICATE_BASE: &str = "https://api.replicate.com/v1";
+
+/// Best-effort content-type guess from file extension. Replicate's
+/// Files API accepts the bytes regardless of declared type, but a
+/// correct hint helps Wan / other downstream models route the file.
+fn guess_content_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()) {
+        Some(ref ext) if ext == "jpg" || ext == "jpeg" => "image/jpeg",
+        Some(ref ext) if ext == "png" => "image/png",
+        Some(ref ext) if ext == "webp" => "image/webp",
+        Some(ref ext) if ext == "mp4" => "video/mp4",
+        Some(ref ext) if ext == "mov" => "video/quicktime",
+        Some(ref ext) if ext == "mp3" => "audio/mpeg",
+        Some(ref ext) if ext == "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    }
+}
 
 /// Strict authority check — `starts_with("https://api.replicate.com/")`
 /// would let `https://api.replicate.com.attacker.com/...` through and
@@ -142,6 +164,115 @@ pub async fn replicate_get_prediction(url: String) -> Result<Value, ReplicateErr
         });
     }
     request_json(reqwest::Method::GET, &url, None).await
+}
+
+/// Upload a local file to Replicate's Files API and return the
+/// canonical URL to use as a prediction input.
+///
+/// Why: Wan (and most Replicate models) accept `input.image` as an
+/// HTTPS URL — they fetch the bytes themselves. The original source
+/// image of a workspace has an external CDN URL the user pasted in,
+/// but ffmpeg-derived assets (extracted frames, trimmed clips, stitched
+/// videos) only live in the user's Documents folder and have no
+/// reachable URL. Posting them through this endpoint produces a
+/// short-lived hosted URL that's good enough for the prediction to
+/// fetch from.
+///
+/// Files expire after ~24 hours per Replicate's defaults — the caller
+/// is expected to upload fresh on each generate rather than cache the
+/// URL across days. For small images / short clips the upload cost
+/// is sub-second.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UploadedFile {
+    /// Canonical URL Replicate uses to refer to the file. Pass this as
+    /// `input.image` (or similar) when starting a prediction; Replicate
+    /// resolves it internally without re-billing the upload.
+    pub url: String,
+}
+
+/// Replicate's Files API rejects uploads over 100 MB. We refuse a bit
+/// earlier so the user gets a clear error before we slurp ~100 MB into
+/// memory.
+const MAX_UPLOAD_BYTES: u64 = 90 * 1024 * 1024;
+
+#[tauri::command]
+pub async fn replicate_upload_file(abs_path: String) -> Result<UploadedFile, ReplicateError> {
+    let tok = token()?;
+
+    // Refuse anything outside the user's Documents folder. Without this
+    // a future renderer bug (or compromised tab component) could pass
+    // an arbitrary path — e.g. `~/.ssh/id_rsa` — and Replicate would
+    // happily host it on its public-ish file CDN. The canonicalised
+    // path is what we use downstream so we don't act on the bypassable
+    // original string.
+    let canon = assert_safe_document_path(Path::new(&abs_path)).map_err(|e| ReplicateError {
+        message: e.message,
+    })?;
+
+    let filename = canon
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("upload.bin")
+        .to_string();
+    let content_type = guess_content_type(&canon);
+
+    // Size cap BEFORE the in-memory read so a 4 GB stitched video
+    // doesn't OOM the sidecar. tokio::fs::read loads the entire
+    // file into a Vec<u8>, and reqwest's multipart::Part::bytes
+    // takes ownership of another copy. A 90 MB cap leaves headroom
+    // under Replicate's 100 MB API limit and stays well under the
+    // memory we're comfortable spiking in this process.
+    let metadata = fs::metadata(&canon).await.map_err(|e| ReplicateError {
+        message: format!("stat failed for {}: {e}", canon.display()),
+    })?;
+    if metadata.len() > MAX_UPLOAD_BYTES {
+        return Err(ReplicateError {
+            message: format!(
+                "file too large to upload to Replicate: {} bytes (limit {})",
+                metadata.len(),
+                MAX_UPLOAD_BYTES
+            ),
+        });
+    }
+
+    let bytes = fs::read(&canon).await.map_err(|e| ReplicateError {
+        message: format!("failed to read {}: {e}", canon.display()),
+    })?;
+
+    let part = multipart::Part::bytes(bytes)
+        .file_name(filename.clone())
+        .mime_str(content_type)
+        .map_err(|e| ReplicateError {
+            message: format!("invalid content type {content_type}: {e}"),
+        })?;
+    let form = multipart::Form::new().part("content", part);
+
+    let res = client()
+        .post(format!("{REPLICATE_BASE}/files"))
+        .header("Authorization", format!("Token {tok}"))
+        .multipart(form)
+        .send()
+        .await?;
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_else(|_| "<no body>".into());
+        return Err(ReplicateError {
+            message: format!("Replicate Files API {status}: {text}"),
+        });
+    }
+    let body: Value = res.json().await?;
+    // Replicate's response: { id, name, urls: { get, download }, ... }
+    // `get` is the canonical resource URL; predictions resolve it
+    // server-side. Prefer it over `download` to keep things explicit.
+    let url = body
+        .get("urls")
+        .and_then(|u| u.get("get"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ReplicateError {
+            message: format!("Replicate Files API response missing urls.get: {body}"),
+        })?
+        .to_string();
+    Ok(UploadedFile { url })
 }
 
 /// POST a cancel URL — best-effort, so even a 4xx is logged but not

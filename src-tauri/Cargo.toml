@@ -29,8 +29,8 @@ serde_json = "1"
 # Rust-side HTTP client for Replicate proxy commands. Reading the
 # REPLICATE_API_TOKEN env var in the Rust process means the secret
 # never lands in the renderer's JS bundle.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["time"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+tokio = { version = "1", features = ["time", "fs"] }
 url = "2"
 # `dotenvy` (the maintained fork of `dotenv`) picks up the same `.env`
 # file the Vite dev server reads, so local dev works the same way.
