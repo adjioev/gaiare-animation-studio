@@ -1,15 +1,11 @@
 // Generate-clip panel — controlled component. Persisted state (input
 // asset + prompt) lives on the parent so closing/reopening tabs doesn't
-// lose work. Session state (generation status, preview URL) is local
-// because it's regenerable and shouldn't bloat workspace.json.
+// lose work. Session state (generation status, latest-preview URL) is
+// local because it's regenerable and shouldn't bloat workspace.json.
+// Every successful generation auto-saves as a new video asset; the
+// `previewUrl` is just the most-recent one for in-tab playback.
 
 import { useEffect, useRef, useState } from "react";
-import {
-  BaseDirectory,
-  exists,
-  remove,
-  rename,
-} from "@tauri-apps/plugin-fs";
 import {
   runWan,
   uploadFileToReplicate,
@@ -40,7 +36,6 @@ import {
 type Status = { state: StatusState; message?: string };
 
 export function GenerateClipTab({
-  tabId,
   folderName,
   externalRef,
   inputAsset,
@@ -49,9 +44,7 @@ export function GenerateClipTab({
   prompt,
   onPromptChange,
   onSave,
-  onPreviewChange,
 }: {
-  tabId: string;
   folderName: string;
   externalRef: string;
   inputAsset: Asset | null;
@@ -60,15 +53,10 @@ export function GenerateClipTab({
   prompt: string;
   onPromptChange: (next: string) => void;
   onSave: (asset: Asset) => Promise<void>;
-  onPreviewChange: (hasUnsavedPreview: boolean) => void;
 }) {
   const [status, setStatus] = useState<Status>({ state: "idle" });
-  const [previewRelPath, setPreviewRelPath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewDuration, setPreviewDuration] = useState<number | null>(null);
-  // Full UUID, not a 8-char prefix — birthday collisions at ~256 open
-  // tabs would otherwise overwrite each other's preview file mid-write.
-  const previewFilename = useRef(`preview-${tabId}.mp4`);
   // AbortController for the in-flight Replicate call. Reset between
   // generations; aborted when the tab unmounts (close, switch
   // workspace) so partial work doesn't leak ghost saves.
@@ -77,12 +65,9 @@ export function GenerateClipTab({
   // Reset preview when the input asset changes (the old preview was
   // produced against a different start frame and is now stale).
   useEffect(() => {
-    setPreviewRelPath(null);
     setPreviewUrl(null);
     setPreviewDuration(null);
     setStatus({ state: "idle" });
-    onPreviewChange(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inputAsset?.id]);
 
   // Abort + clean up on unmount.
@@ -102,13 +87,12 @@ export function GenerateClipTab({
       return;
     }
     // If a generation is in flight, cancel it first — we're about to
-    // overwrite the preview file anyway.
+    // start a fresh one.
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
     setPreviewUrl(null);
-    onPreviewChange(false);
 
     try {
       // Resolve the URL Wan will fetch the start frame from. The
@@ -143,25 +127,62 @@ export function GenerateClipTab({
       if (controller.signal.aborted) return;
       setStatus({ state: "running", message: "downloading…" });
       await ensureWorkdir(folderName, externalRef);
+
+      // Download straight into the canonical clip-<assetId>.mp4 file
+      // and save the asset entry — no intermediate "preview"
+      // step. Earlier flow required an explicit "Save to assets"
+      // click to commit, which was friction for the dominant happy
+      // path: the contractor usually wants every generation in the
+      // gallery, and prunes bad ones with the × button.
+      const newId = newAssetId();
+      const filename = generateAssetFilename({
+        id: newId,
+        kind: "video",
+        hint: "clip",
+      });
       const rel = await downloadInto({
         folderName,
         externalRef,
-        filename: previewFilename.current,
+        filename,
         url,
         signal: controller.signal,
       });
-      setPreviewRelPath(rel);
+      if (controller.signal.aborted) return;
+
+      // Save the asset BEFORE probing duration. ffprobe spawns a
+      // subprocess and can take hundreds of ms; if the tab unmounts
+      // (closeTab, switchWorkspace, app quit) during the probe the
+      // controller aborts but the mp4 is already on disk — without
+      // an earlier `onSave` it would be an orphan in workspace.json.
+      // Probing afterwards patches durationSec via upsert.
+      const newAsset: Asset = {
+        id: newId,
+        kind: "video",
+        filename,
+        label: shortLabel(prompt),
+        prompt,
+        parentAssetIds: [inputAsset.id],
+        createdAt: Date.now(),
+      };
+      await onSave(newAsset);
       setPreviewUrl(await asset(rel));
+      setStatus({ state: "done", message: "saved · probing duration…" });
 
+      let durationSec: number | null = null;
       try {
-        const dur = await probeDurationSeconds(await absPath(rel));
-        setPreviewDuration(dur);
+        durationSec = await probeDurationSeconds(await absPath(rel));
       } catch {
-        setPreviewDuration(null);
+        // probe failure is fine — duration is optional metadata
       }
-
-      setStatus({ state: "done", message: "preview ready — save to keep" });
-      onPreviewChange(true);
+      if (controller.signal.aborted) return;
+      if (durationSec !== null) {
+        await onSave({ ...newAsset, durationSec });
+      }
+      setPreviewDuration(durationSec);
+      setStatus({
+        state: "done",
+        message: `saved · ${durationSec?.toFixed(1) ?? "?"}s`,
+      });
     } catch (e) {
       if ((e as Error).name === "AbortError") {
         setStatus({ state: "idle" });
@@ -170,73 +191,6 @@ export function GenerateClipTab({
       setStatus({ state: "error", message: errorMessage(e) });
     }
   }
-
-  async function save() {
-    if (!previewRelPath || !inputAsset) return;
-    const id = newAssetId();
-    const filename = generateAssetFilename({
-      id,
-      kind: "video",
-      hint: "clip",
-    });
-    const targetRel = relPathForAsset(folderName, externalRef, {
-      id,
-      kind: "video",
-      filename,
-    } as Asset);
-
-    await rename(previewRelPath, targetRel, {
-      oldPathBaseDir: BaseDirectory.Document,
-      newPathBaseDir: BaseDirectory.Document,
-    });
-
-    const newAsset: Asset = {
-      id,
-      kind: "video",
-      filename,
-      label: shortLabel(prompt),
-      prompt,
-      parentAssetIds: [inputAsset.id],
-      durationSec: previewDuration ?? undefined,
-      createdAt: Date.now(),
-    };
-    // `onSave` MUST persist before returning — see the autosave-race
-    // note in App.tsx. We await it so that if the user closes the tab
-    // immediately after Save, the workspace.json already records this
-    // asset (otherwise it would become an orphan file).
-    await onSave(newAsset);
-
-    setPreviewRelPath(targetRel);
-    setPreviewUrl(await asset(targetRel));
-    onPreviewChange(false);
-    setStatus({ state: "done", message: "saved to gallery" });
-  }
-
-  // Best-effort cleanup of an orphaned preview file when the tab is
-  // closed without saving. The exists-check tolerates races (rename
-  // already happened) and the catch swallows fs errors (the next time
-  // this tabId is reused, the file will be overwritten anyway).
-  useEffect(() => {
-    const filename = previewFilename.current;
-    const ref = externalRef;
-    const fn = folderName;
-    return () => {
-      void (async () => {
-        try {
-          const rel = `${fn}/q${ref}/${filename}`;
-          if (await exists(rel, { baseDir: BaseDirectory.Document })) {
-            await remove(rel, { baseDir: BaseDirectory.Document });
-          }
-        } catch {
-          // ignore
-        }
-      })();
-    };
-    // We intentionally bind to the values at mount time; the preview
-    // file name is keyed by `tabId` (immutable) and we don't want
-    // changes to `folderName` mid-life to retarget the cleanup.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   return (
     <div className="space-y-6">
@@ -256,7 +210,10 @@ export function GenerateClipTab({
               <img
                 src={inputAssetThumbUrl}
                 alt={inputAsset.label}
-                className="h-32 w-48 rounded-lg border border-neutral-800 object-cover"
+                // h-56 + aspect-video = 224×398 ≈ Wan's 480p 16:9
+                // output dimensions, so the start frame previews at
+                // the same shape as the generated clip will be.
+                className="h-56 aspect-video rounded-lg border border-neutral-800 object-cover"
               />
             )}
             <div>
@@ -278,23 +235,21 @@ export function GenerateClipTab({
           </div>
 
           <Field label="Prompt">
-            <Textarea value={prompt} onChange={onPromptChange} rows={10} />
+            <Textarea
+              value={prompt}
+              onChange={onPromptChange}
+              rows={10}
+              placeholder="Open the AI panel on the right and describe what you want (e.g. &quot;red sedan turns left, van stays put&quot;), then click Apply to drop the generated prompt here. Or type directly if you know the structure."
+            />
           </Field>
 
           <div className="mt-4 flex items-center gap-3">
             <Button onClick={generate} disabled={status.state === "running"}>
               {status.state === "running" ? "Generating…" : "Generate"}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={save}
-              disabled={!previewRelPath || status.state === "running"}
-            >
-              Save to assets
-            </Button>
-            {previewDuration && (
+            {previewDuration && status.state !== "running" && (
               <span className="text-xs text-neutral-500">
-                preview: {previewDuration.toFixed(2)} s
+                latest · {previewDuration.toFixed(2)} s — saved to gallery
               </span>
             )}
           </div>

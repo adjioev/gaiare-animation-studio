@@ -5,9 +5,9 @@
 //
 // Path: <Documents>/<folderName>/q<externalRef>/
 //   ├─ source-<id>.jpg
-//   ├─ preview-<tabId>.mp4
 //   ├─ clip-<id>.mp4
 //   ├─ frame-<id>.jpg
+//   ├─ stitched-<id>.mp4
 //   └─ workspace.json
 //
 // Absolute paths used to be built with string concatenation

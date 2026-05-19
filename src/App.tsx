@@ -25,6 +25,7 @@ import {
   upsertAsset,
   type Asset,
   type AssetKind,
+  type ChatMessage,
   type PersistedTab,
   type Workspace,
 } from "./lib/workspace";
@@ -43,6 +44,7 @@ import { StitchTab } from "./components/tabs/StitchTab";
 import { SettingsModal } from "./components/SettingsModal";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
+import { ChatPanel } from "./components/ChatPanel";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
 
@@ -50,13 +52,11 @@ const DEFAULT_EXTERNAL_REF = "14";
 const DEFAULT_SOURCE_URL =
   "https://hel1.your-objectstorage.com/gaiare-media/georgia/driving-tests/images/q14.jpg";
 
-const DEFAULT_PROMPT = `The red sedan in the upper background turns left through the intersection, following the yellow curved arrow on the road. The car continues driving leftward, growing slightly larger as it approaches the camera, and exits the frame at the bottom-left edge.
-
-By the end of the clip, the red sedan is completely off-screen — no longer visible in the frame.
-
-The yellow van in the foreground does NOT move. The van remains stationary throughout.
-
-Static camera, no zoom, no pan. Photorealistic.`;
+/** Generate tabs open with an empty prompt — the user authors the
+ *  prompt via the AI chat panel (preferred) or types directly. The
+ *  q14-specific scaffold prompt that used to live here was a stand-in
+ *  for the chat assistant that didn't exist yet. */
+const DEFAULT_PROMPT = "";
 
 function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -89,7 +89,6 @@ function App() {
   const [thumbnailUrls, setThumbnailUrls] = useState<Record<string, string>>(
     {},
   );
-  const [unsavedTabIds, setUnsavedTabIds] = useState<Set<string>>(new Set());
   const [globalError, setGlobalError] = useState<string | null>(null);
   /** Non-fatal warnings surfaced as banners at the top of the editor —
    *  failed source-image download, asset files missing from disk, a
@@ -211,8 +210,7 @@ function App() {
         await adoptLock(ws.externalRef);
 
         setWorkspace(ws);
-        setUnsavedTabIds(new Set());
-        await refreshThumbnails(ws);
+            await refreshThumbnails(ws);
       } catch (e) {
         setGlobalError(errorMessage(e));
       } finally {
@@ -314,14 +312,16 @@ function App() {
   // CURRENT values from event callbacks without re-registering listeners
   // on every state change (which would have leak/duplicate-modal races
   // around the async `listen()` resolution).
-  const unsavedTabIdsRef = useRef(unsavedTabIds);
   const confirmRef = useRef(confirm);
   const settingsOpenRef = useRef(settingsOpen);
   const newWorkspaceOpenRef = useRef(newWorkspaceOpen);
   const workspaceRef = useRef(workspace);
-  useEffect(() => {
-    unsavedTabIdsRef.current = unsavedTabIds;
-  }, [unsavedTabIds]);
+  // `closeTab` closes over `workspace` from its defining render. The
+  // keyboard handler below is mount-once (empty deps), so without the
+  // ref it'd call the very first `closeTab` — which captured a null
+  // workspace and would early-return forever. Refreshing this ref each
+  // render lets Cmd+W actually fire the latest version.
+  const closeTabRef = useRef<(id: string) => void>(() => {});
   useEffect(() => {
     confirmRef.current = confirm;
   }, [confirm]);
@@ -351,7 +351,7 @@ function App() {
   // alive on macOS (default: closing the last window ≠ quit).
   //
   // The effect mounts ONCE. Earlier versions re-registered on every
-  // `unsavedTabIds` change which raced with the async `listen()` —
+  // state change which raced with the async `listen()` —
   // unlisten-leak + duplicate modals. Now the callback reads current
   // values from refs.
   useEffect(() => {
@@ -368,22 +368,13 @@ function App() {
       ) {
         return;
       }
-      const unsavedCount = unsavedTabIdsRef.current.size;
-      const hasUnsaved = unsavedCount > 0;
       setConfirm({
-        title: hasUnsaved
-          ? "Quit with unsaved previews?"
-          : "Quit Animation Studio?",
-        message: hasUnsaved
-          ? [
-              `${unsavedCount} tab${unsavedCount === 1 ? " has" : "s have"} an unsaved generation preview.`,
-              "Quitting now will discard those previews — they can be regenerated, but the spent API credits won't come back.",
-            ]
-          : [
-              "The workspace is saved. You can pick it back up exactly where you left off next launch.",
-            ],
+        title: "Quit Animation Studio?",
+        message: [
+          "The workspace is saved. You can pick it back up exactly where you left off next launch.",
+        ],
         confirmLabel: "Quit",
-        destructive: hasUnsaved,
+        destructive: false,
         onConfirm: async () => {
           setConfirm(null);
           // Arm before force_quit — the Rust side refuses force_quit
@@ -392,6 +383,14 @@ function App() {
           // can't bypass the confirm modal.
           try {
             await invoke("arm_quit");
+            // Brief grace window so any in-flight `writeFile`
+            // (e.g. a Wan download mid-write) can flush before the
+            // Rust process exits — otherwise the mp4 ends up
+            // truncated on disk and orphaned (no workspace.json
+            // entry because `onSave` runs only after writeFile
+            // returns). 300 ms is well below the threshold where
+            // the user notices the pause.
+            await new Promise((r) => setTimeout(r, 300));
             await invoke("force_quit");
           } catch (e) {
             console.error("[quit] force_quit failed", e);
@@ -464,7 +463,7 @@ function App() {
         const activeId = workspaceRef.current?.activeTabId;
         if (!activeId) return;
         e.preventDefault();
-        closeTab(activeId);
+        closeTabRef.current(activeId);
       }
     }
     window.addEventListener("keydown", onKey);
@@ -495,7 +494,6 @@ function App() {
     await adoptLock(ws.externalRef);
 
     setWorkspace(ws);
-    setUnsavedTabIds(new Set());
     await refreshThumbnails(ws);
   }
 
@@ -519,7 +517,6 @@ function App() {
     await adoptLock(ws.externalRef);
 
     setWorkspace(ws);
-    setUnsavedTabIds(new Set());
     await refreshThumbnails(ws);
   }
 
@@ -776,28 +773,7 @@ function App() {
     });
   }
 
-  function closeTab(id: string) {
-    if (!workspace) return;
-    if (unsavedTabIds.has(id)) {
-      setConfirm({
-        title: "Close tab with unsaved preview?",
-        message: [
-          "This tab has an unsaved generation preview.",
-          "The preview will be discarded — you can regenerate it.",
-        ],
-        confirmLabel: "Close tab",
-        destructive: true,
-        onConfirm: () => {
-          setConfirm(null);
-          void performCloseTab(id);
-        },
-      });
-      return;
-    }
-    void performCloseTab(id);
-  }
-
-  async function performCloseTab(id: string) {
+  async function closeTab(id: string) {
     if (!workspace) return;
     const nextTabs = workspace.tabs.filter((t) => t.id !== id);
     let nextActive = workspace.activeTabId;
@@ -811,11 +787,6 @@ function App() {
     }
     const next = { ...workspace, tabs: nextTabs, activeTabId: nextActive };
     setWorkspace(next);
-    setUnsavedTabIds((prev) => {
-      const n = new Set(prev);
-      n.delete(id);
-      return n;
-    });
     // Persist now — tab closes are the most common "I'm done with this
     // train of thought" event and we want them to land before any
     // potential app crash.
@@ -825,6 +796,9 @@ function App() {
       console.error("[workspace] immediate save after tab close failed", e);
     }
   }
+  // Refresh the ref on every render so the mount-once Cmd+W handler
+  // always invokes the latest `closeTab` (closure over current workspace).
+  closeTabRef.current = closeTab;
 
   function activateTab(id: string) {
     if (!workspace) return;
@@ -841,13 +815,56 @@ function App() {
     });
   }
 
-  function setTabUnsaved(id: string, unsaved: boolean) {
-    setUnsavedTabIds((prev) => {
-      const next = new Set(prev);
-      if (unsaved) next.add(id);
-      else next.delete(id);
-      return next;
+  // ─── AI chat ───────────────────────────────────────────────────────
+
+  function appendChatMessage(msg: ChatMessage) {
+    if (!workspace) return;
+    setWorkspace({
+      ...workspace,
+      chat: [...(workspace.chat ?? []), msg],
     });
+  }
+
+  function applyPromptToActiveTab(prompt: string) {
+    if (!workspace?.activeTabId) return;
+    const active = workspace.tabs.find((t) => t.id === workspace.activeTabId);
+    if (!active || active.kind !== "generate") return;
+    patchTab(active.id, { prompt });
+  }
+
+  function requestResetChat() {
+    if (!workspace) return;
+    const turns = workspace.chat?.length ?? 0;
+    if (turns === 0) return;
+    setConfirm({
+      title: "Reset chat?",
+      message: [
+        `This wipes all ${turns} message${turns === 1 ? "" : "s"} in this workspace's chat.`,
+        "Token cost so far stays on Fireworks' bill — the reset only affects local history. Start fresh with the same skills doc as context.",
+      ],
+      confirmLabel: "Reset",
+      destructive: true,
+      onConfirm: () => {
+        setConfirm(null);
+        // Functional setter: between confirm-open and confirm-click
+        // the workspace state may have been replaced (autosave reload,
+        // switchWorkspace, mid-flight chat append). Reading the
+        // captured `workspace` would wipe chat on the stale shape and
+        // clobber any tab/asset edits that landed in the meantime.
+        setWorkspace((current) =>
+          current ? { ...current, chat: [] } : current,
+        );
+      },
+    });
+  }
+
+  function toggleChatPanel() {
+    const next: Settings = {
+      ...settings,
+      chatPanelCollapsed: !settings.chatPanelCollapsed,
+    };
+    saveSettings(next);
+    setSettings(next);
   }
 
   function tabTitle(tab: PersistedTab): string {
@@ -1028,7 +1045,6 @@ function App() {
         <TabStrip
           tabs={workspace.tabs}
           activeTabId={workspace.activeTabId}
-          unsavedTabIds={unsavedTabIds}
           onActivate={activateTab}
           onClose={closeTab}
           onNew={openNewTab}
@@ -1038,7 +1054,6 @@ function App() {
         <div className="p-6">
           {activeTab?.kind === "generate" && (
             <GenerateClipTab
-              tabId={activeTab.id}
               folderName={folderName}
               externalRef={workspace.externalRef}
               inputAsset={
@@ -1056,7 +1071,6 @@ function App() {
               prompt={activeTab.prompt}
               onPromptChange={(p) => patchTab(activeTab.id, { prompt: p })}
               onSave={handleAssetSave}
-              onPreviewChange={(unsaved) => setTabUnsaved(activeTab.id, unsaved)}
             />
           )}
 
@@ -1122,6 +1136,23 @@ function App() {
           Working dir: Documents/{qdir(folderName, workspace.externalRef)}/
         </footer>
       </div>
+
+      <ChatPanel
+        folderName={folderName}
+        workspace={workspace}
+        activeTab={activeTab}
+        onAppendMessage={appendChatMessage}
+        onApplyPromptToActiveTab={applyPromptToActiveTab}
+        onResetChat={requestResetChat}
+        collapsed={settings.chatPanelCollapsed ?? false}
+        onToggleCollapsed={toggleChatPanel}
+        width={settings.chatPanelWidth}
+        onWidthChange={(next) => {
+          const updated: Settings = { ...settings, chatPanelWidth: next };
+          saveSettings(updated);
+          setSettings(updated);
+        }}
+      />
 
       {settingsOpen && (
         <SettingsModal

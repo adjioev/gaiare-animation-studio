@@ -1,7 +1,6 @@
 // VSCode-style document tab strip. Each tab represents an open
-// generation or extraction in progress. The "+" dropdown adds a new
-// tab; the × on each tab closes it (parent decides whether to confirm
-// when there's an unsaved preview).
+// generation / extraction / trim / stitch document. The "+" dropdown
+// adds a new tab; the × on each tab closes it.
 
 import { clsx } from "clsx";
 import { useRef, useState } from "react";
@@ -10,7 +9,6 @@ import type { PersistedTab } from "../lib/workspace";
 export function TabStrip({
   tabs,
   activeTabId,
-  unsavedTabIds,
   onActivate,
   onClose,
   onNew,
@@ -18,9 +16,6 @@ export function TabStrip({
 }: {
   tabs: PersistedTab[];
   activeTabId: string | null;
-  /** Tab ids that have an unsaved preview — shown with a dot indicator
-   *  so the contractor knows closing would discard generation work. */
-  unsavedTabIds: Set<string>;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onNew: (kind: "generate" | "extract" | "trim" | "stitch") => void;
@@ -47,25 +42,48 @@ export function TabStrip({
           </div>
         )}
 
-        {tabs.map((tab) => (
-          <Tab
-            key={tab.id}
-            active={tab.id === activeTabId}
-            dirty={unsavedTabIds.has(tab.id)}
-            icon={
-              tab.kind === "generate"
-                ? "🎬"
-                : tab.kind === "extract"
-                  ? "✂️"
-                  : tab.kind === "trim"
-                    ? "🎞️"
-                    : "🔗"
-            }
-            title={tabTitle(tab)}
-            onActivate={() => onActivate(tab.id)}
-            onClose={() => onClose(tab.id)}
-          />
-        ))}
+        {tabs.map((tab) => {
+          const active = tab.id === activeTabId;
+          const title = tabTitle(tab);
+          const icon =
+            tab.kind === "generate"
+              ? "🎬"
+              : tab.kind === "extract"
+                ? "✂️"
+                : tab.kind === "trim"
+                  ? "🎞️"
+                  : "🔗";
+          return (
+            <div
+              key={tab.id}
+              className={clsx(
+                "group flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
+                active
+                  ? "bg-neutral-900 text-white"
+                  : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200",
+              )}
+            >
+              <button
+                onClick={() => onActivate(tab.id)}
+                className="flex items-center gap-2"
+                title={title}
+              >
+                <span aria-hidden>{icon}</span>
+                <span className="max-w-[16rem] truncate">{title}</span>
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(tab.id);
+                }}
+                title="Close tab"
+                className="ml-1 flex h-5 w-5 items-center justify-center rounded text-neutral-600 hover:bg-rose-900/40 hover:text-rose-300"
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       <div className="relative shrink-0 py-1 pr-2" ref={menuRef}>
@@ -113,58 +131,6 @@ export function TabStrip({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function Tab({
-  active,
-  dirty,
-  icon,
-  title,
-  onActivate,
-  onClose,
-}: {
-  active: boolean;
-  dirty: boolean;
-  icon: string;
-  title: string;
-  onActivate: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className={clsx(
-        "group flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
-        active
-          ? "bg-neutral-900 text-white"
-          : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200",
-      )}
-    >
-      <button
-        onClick={onActivate}
-        className="flex items-center gap-2"
-        title={title}
-      >
-        <span aria-hidden>{icon}</span>
-        <span className="max-w-[16rem] truncate">{title}</span>
-        {dirty && (
-          <span
-            className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
-            title="Unsaved preview"
-          />
-        )}
-      </button>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        title="Close tab"
-        className="ml-1 flex h-5 w-5 items-center justify-center rounded text-neutral-600 hover:bg-rose-900/40 hover:text-rose-300"
-      >
-        ×
-      </button>
     </div>
   );
 }
