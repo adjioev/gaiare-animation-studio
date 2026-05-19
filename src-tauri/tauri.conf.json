@@ -22,7 +22,7 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$HOME/Documents/gaiare-animation-studio/**"
+          "$DOCUMENT/**"
         ]
       }
     }
@@ -36,6 +36,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
     ]
   }
 }

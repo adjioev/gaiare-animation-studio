@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "setup-ffmpeg": "node scripts/download-ffmpeg.mjs --strict",
+    "predev": "node scripts/download-ffmpeg.mjs --strict",
+    "prebuild": "node scripts/download-ffmpeg.mjs --strict",
+    "postinstall": "node scripts/download-ffmpeg.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
