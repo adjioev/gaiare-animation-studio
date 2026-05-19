@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { absPath, asset } from "../../lib/workdir";
-import { extractFrame, probeDurationSeconds } from "../../lib/ffmpeg";
+import { extractFrame, probeDurationSeconds, trimClip } from "../../lib/ffmpeg";
 import { Button, StatusPill, errorMessage, type StatusState } from "../ui";
 import {
   generateAssetFilename,
@@ -38,6 +38,7 @@ export function ExtractFrameTab({
   const [status, setStatus] = useState<Status>({ state: "idle" });
   const [durationSec, setDurationSec] = useState<number | null>(null);
   const [savedFrameUrl, setSavedFrameUrl] = useState<string | null>(null);
+  const [savedTrimUrl, setSavedTrimUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Reset session state when input video changes.
@@ -45,6 +46,7 @@ export function ExtractFrameTab({
     setStatus({ state: "idle" });
     setDurationSec(inputVideo?.durationSec ?? null);
     setSavedFrameUrl(null);
+    setSavedTrimUrl(null);
   }, [inputVideo?.id]);
 
   /** Render-time effective scrub position: persisted value if set,
@@ -85,6 +87,58 @@ export function ExtractFrameTab({
       await onSave(newAsset);
       setSavedFrameUrl(await asset(targetRel));
       setStatus({ state: "done", message: "saved to gallery" });
+    } catch (e) {
+      setStatus({ state: "error", message: errorMessage(e) });
+    }
+  }
+
+  /** Convenience: trim the source clip from 0 to the current scrub
+   *  position and save the result as a new video asset. Common workflow
+   *  — scrub Wan output to find where motion gets bad, then keep just
+   *  the good opening segment. Saves a TrimClipTab round-trip. */
+  async function saveTrimToHere() {
+    if (!inputVideo) return;
+    if (effectiveSeconds < 0.1) {
+      setStatus({
+        state: "error",
+        message: "Scrub further into the clip first (need at least 0.1 s).",
+      });
+      return;
+    }
+    setStatus({ state: "running", message: "ffmpeg trimming…" });
+    const id = newAssetId();
+    const filename = generateAssetFilename({ id, kind: "video", hint: "clip" });
+    const targetRel = relPathForAsset(folderName, externalRef, {
+      id,
+      kind: "video",
+      filename,
+    } as Asset);
+    try {
+      const inAbs = await absPath(
+        relPathForAsset(folderName, externalRef, inputVideo),
+      );
+      const outAbs = await absPath(targetRel);
+      await trimClip({
+        videoAbsPath: inAbs,
+        startSeconds: 0,
+        endSeconds: effectiveSeconds,
+        outputAbsPath: outAbs,
+      });
+      const newAsset: Asset = {
+        id,
+        kind: "video",
+        filename,
+        label: `Trim 0.0–${effectiveSeconds.toFixed(1)}s of ${inputVideo.label}`,
+        parentAssetIds: [inputVideo.id],
+        durationSec: effectiveSeconds,
+        createdAt: Date.now(),
+      };
+      await onSave(newAsset);
+      // Cache-bust — the WebView's asset:// cache otherwise returns
+      // the previous mp4 if a new trim is saved under a fresh id but
+      // the same gallery path resolution.
+      setSavedTrimUrl(`${await asset(targetRel)}?t=${Date.now()}`);
+      setStatus({ state: "done", message: "trimmed clip saved" });
     } catch (e) {
       setStatus({ state: "error", message: errorMessage(e) });
     }
@@ -169,13 +223,29 @@ export function ExtractFrameTab({
             </span>
           </div>
 
-          <div className="mt-4">
+          <div className="mt-4 flex flex-wrap items-center gap-3">
             <Button
               onClick={saveFrame}
               disabled={!durationSec || status.state === "running"}
             >
-              {status.state === "running" ? "Extracting…" : "Save frame to assets"}
+              {status.state === "running"
+                ? "Working…"
+                : "Save frame to assets"}
             </Button>
+            <Button
+              variant="secondary"
+              onClick={saveTrimToHere}
+              disabled={
+                !durationSec ||
+                status.state === "running" ||
+                effectiveSeconds < 0.1
+              }
+            >
+              {`Trim 0–${effectiveSeconds.toFixed(1)}s to clip`}
+            </Button>
+            <span className="text-xs text-neutral-500">
+              Trim keeps the opening segment up to the scrub position.
+            </span>
           </div>
 
           {savedFrameUrl && (
@@ -184,6 +254,19 @@ export function ExtractFrameTab({
               <img
                 src={savedFrameUrl}
                 alt="extracted frame"
+                className="max-h-64 rounded-lg border border-neutral-800"
+              />
+            </div>
+          )}
+
+          {savedTrimUrl && (
+            <div className="mt-4">
+              <p className="mb-1 text-xs text-neutral-500">Last trimmed clip:</p>
+              <video
+                src={savedTrimUrl}
+                controls
+                muted
+                playsInline
                 className="max-h-64 rounded-lg border border-neutral-800"
               />
             </div>
