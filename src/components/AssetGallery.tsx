@@ -15,6 +15,7 @@ export function AssetGallery({
   onRequestDelete,
   activeKind,
   onPickIncompatible,
+  onPreview,
   thumbnailUrls,
 }: {
   assets: Asset[];
@@ -28,6 +29,10 @@ export function AssetGallery({
   /** Called when the user clicks an asset whose kind doesn't match the
    *  active tab. Parent can switch tabs and select in one move. */
   onPickIncompatible: (id: string, kind: AssetKind) => void;
+  /** Open the inspect viewer for this asset. Triggered by the 👁
+   *  hover icon — gallery clicks still go to onSelect /
+   *  onPickIncompatible as before. */
+  onPreview: (id: string) => void;
   thumbnailUrls: Record<string, string>;
 }) {
   const images = assets.filter((a) => a.kind === "image");
@@ -53,6 +58,7 @@ export function AssetGallery({
           onSelect={onSelect}
           onRequestDelete={onRequestDelete}
           onPickIncompatible={(id) => onPickIncompatible(id, "image")}
+          onPreview={onPreview}
           activeKind={activeKind}
           thumbnailUrls={thumbnailUrls}
           empty="No images yet."
@@ -65,6 +71,7 @@ export function AssetGallery({
           onSelect={onSelect}
           onRequestDelete={onRequestDelete}
           onPickIncompatible={(id) => onPickIncompatible(id, "video")}
+          onPreview={onPreview}
           activeKind={activeKind}
           thumbnailUrls={thumbnailUrls}
           empty="No videos yet — generate one from the Generate Clip tab."
@@ -82,6 +89,7 @@ function Section({
   onSelect,
   onRequestDelete,
   onPickIncompatible,
+  onPreview,
   activeKind,
   thumbnailUrls,
   empty,
@@ -93,6 +101,7 @@ function Section({
   onSelect: (id: string) => void;
   onRequestDelete: (id: string) => void;
   onPickIncompatible: (id: string) => void;
+  onPreview: (id: string) => void;
   activeKind: AssetKind;
   thumbnailUrls: Record<string, string>;
   empty: string;
@@ -136,6 +145,7 @@ function Section({
                       : onPickIncompatible(asset.id)
                   }
                   onDelete={() => onRequestDelete(asset.id)}
+                  onPreview={() => onPreview(asset.id)}
                 />
               </li>
             );
@@ -153,6 +163,7 @@ function AssetCard({
   thumbnailUrl,
   onClick,
   onDelete,
+  onPreview,
 }: {
   asset: Asset;
   isSelected: boolean;
@@ -160,6 +171,7 @@ function AssetCard({
   thumbnailUrl: string | null;
   onClick: () => void;
   onDelete: () => void;
+  onPreview: () => void;
 }) {
   // Only video assets are draggable today — the Stitch tab is the only
   // drop target and it consumes videos. Source images stay non-draggable
@@ -198,6 +210,17 @@ function AssetCard({
               : `"${asset.label}" is a video — current tab needs an image.\nClick to open a new Extract Frame tab on this video.`
         }
       >
+        {/* Hover pill on incompatible cards — replaces the previously
+            silent "click opens a new tab" side-effect with a visible
+            cue. Hidden by default to avoid permanent visual noise. */}
+        {!isCompatible && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute right-2 top-2 hidden rounded-full bg-neutral-800 px-2 py-0.5 text-[9px] uppercase tracking-wider text-neutral-400 group-hover:block"
+          >
+            ↗ new {asset.kind === "image" ? "Generate" : "Extract"}
+          </span>
+        )}
         <div className="h-12 w-16 shrink-0 overflow-hidden rounded bg-neutral-900">
           {!thumbnailUrl ? (
             <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-600">
@@ -238,25 +261,41 @@ function AssetCard({
         </div>
       </button>
 
-      {asset.role === "source" ? (
-        <span
-          title="Source image (protected)"
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] text-neutral-600"
-        >
-          🔒
-        </span>
-      ) : (
+      <div className="flex shrink-0 items-center gap-0.5">
+        {/* 👁 inspect — hidden until hover. Inspect mode shows
+            metadata + actions with explicit labels, useful for
+            confirming what generation produced a clip before reusing
+            it. Click-to-pick on the card itself stays the fast path. */}
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onDelete();
+            onPreview();
           }}
-          title="Delete asset"
-          className="invisible flex h-6 w-6 shrink-0 items-center justify-center rounded text-neutral-500 hover:bg-rose-900/40 hover:text-rose-300 group-hover:visible"
+          title="Open in viewer"
+          className="invisible flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-800 hover:text-neutral-200 group-hover:visible"
         >
-          ×
+          👁
         </button>
-      )}
+        {asset.role === "source" ? (
+          <span
+            title="Source image (protected)"
+            className="flex h-6 w-6 items-center justify-center rounded text-[10px] text-neutral-600"
+          >
+            🔒
+          </span>
+        ) : (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete asset"
+            className="invisible flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-rose-900/40 hover:text-rose-300 group-hover:visible"
+          >
+            ×
+          </button>
+        )}
+      </div>
     </div>
   );
 }

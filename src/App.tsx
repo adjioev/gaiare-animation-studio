@@ -45,6 +45,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
 import { ChatPanel } from "./components/ChatPanel";
+import { AssetViewer } from "./components/AssetViewer";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
 
@@ -62,6 +63,11 @@ function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  /** ID of the asset shown in the inspect viewer, or null if the
+   *  viewer is closed. Kept on App rather than per-card local state so
+   *  Esc / backdrop dismiss + keyboard navigation can be wired
+   *  centrally without leaking modal state into the gallery. */
+  const [viewerAssetId, setViewerAssetId] = useState<string | null>(null);
   /** When set, renders a ConfirmModal. The `onConfirm` callback is the
    *  destructive action; setting back to `null` dismisses the modal. */
   const [confirm, setConfirm] = useState<{
@@ -687,6 +693,14 @@ function App() {
       const { [id]: _gone, ...rest } = prev;
       return rest;
     });
+    // Close the inspect viewer if it was open on the just-deleted
+    // asset. Without this the viewer's IIFE renders null (because
+    // `findAsset` returns null), the modal disappears silently, but
+    // `viewerAssetId` still references a ghost id — a future asset
+    // with the same id would resurrect the modal.
+    if (viewerAssetId === id) {
+      setViewerAssetId(null);
+    }
   }
 
   // ─── Tab operations ───────────────────────────────────────────────
@@ -943,6 +957,7 @@ function App() {
         onRequestDelete={handleAssetDelete}
         activeKind={activeKind}
         onPickIncompatible={pickIncompatibleAsset}
+        onPreview={setViewerAssetId}
         thumbnailUrls={thumbnailUrls}
       />
 
@@ -1193,6 +1208,23 @@ function App() {
           }}
         />
       )}
+
+      {viewerAssetId &&
+        (() => {
+          const a = findAsset(workspace, viewerAssetId);
+          if (!a) return null;
+          return (
+            <AssetViewer
+              asset={a}
+              thumbnailUrl={thumbnailUrls[a.id] ?? null}
+              workspace={workspace}
+              activeTabKind={activeTab?.kind ?? null}
+              onClose={() => setViewerAssetId(null)}
+              onUseAsInput={() => selectAssetForActiveTab(a.id)}
+              onOpenInNewTab={() => pickIncompatibleAsset(a.id, a.kind)}
+            />
+          );
+        })()}
     </main>
   );
 }
