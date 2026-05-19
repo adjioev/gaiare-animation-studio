@@ -93,6 +93,29 @@ async function pollPrediction<TOutput>(
 }
 
 /**
+ * Upload a local file to Replicate's Files API and get back the URL
+ * predictions should use as their `input.image` (or similar).
+ *
+ * Workspaces start with a single CDN-hosted source image (the workspace
+ * config has its URL), but every subsequent asset — extracted frames,
+ * trimmed clips, stitched videos — lives only on the user's disk and
+ * has no URL Wan can fetch from. This wrapper bridges that gap on
+ * demand. The result expires after ~24 h on Replicate's side, so call
+ * fresh per generation rather than caching long-term.
+ */
+export async function uploadFileToReplicate(absPath: string): Promise<string> {
+  const res = await invoke<unknown>("replicate_upload_file", { absPath });
+  if (typeof res !== "object" || res === null) {
+    throw new Error("replicate_upload_file returned non-object");
+  }
+  const url = (res as { url?: unknown }).url;
+  if (typeof url !== "string") {
+    throw new Error("replicate_upload_file returned no url");
+  }
+  return url;
+}
+
+/**
  * Wan 2.2 i2v fast — the workhorse for our animated explainers.
  * Costs ~$0.05 per clip at 480p / 81 frames as of May 2026.
  *

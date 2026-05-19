@@ -39,6 +39,7 @@ import { TabStrip } from "./components/TabStrip";
 import { GenerateClipTab } from "./components/tabs/GenerateClipTab";
 import { ExtractFrameTab } from "./components/tabs/ExtractFrameTab";
 import { TrimClipTab } from "./components/tabs/TrimClipTab";
+import { StitchTab } from "./components/tabs/StitchTab";
 import { SettingsModal } from "./components/SettingsModal";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
@@ -668,9 +669,16 @@ function App() {
     let next = removeAsset(workspace, id);
     next = {
       ...next,
-      tabs: next.tabs.map((t) =>
-        t.inputAssetId === id ? { ...t, inputAssetId: null } : t,
-      ),
+      tabs: next.tabs.map((t) => {
+        // Stitch holds a list; drop every occurrence of the deleted id.
+        if (t.kind === "stitch") {
+          return {
+            ...t,
+            inputAssetIds: t.inputAssetIds.filter((x) => x !== id),
+          };
+        }
+        return t.inputAssetId === id ? { ...t, inputAssetId: null } : t;
+      }),
     };
     setWorkspace(next);
     try {
@@ -692,6 +700,17 @@ function App() {
     if (!a) return;
     const active = workspace.tabs.find((t) => t.id === workspace.activeTabId);
     if (!active) return;
+    // Stitch is a multi-input tab — clicking a video appends to the
+    // list rather than replacing a single-input slot. D&D from the
+    // gallery achieves the same; click is the keyboard / trackpad
+    // parity path.
+    if (active.kind === "stitch") {
+      if (a.kind !== "video") return;
+      patchTab(active.id, {
+        inputAssetIds: [...active.inputAssetIds, assetId],
+      });
+      return;
+    }
     const wantsVideo = active.kind === "extract" || active.kind === "trim";
     if (
       (active.kind === "generate" && a.kind === "image") ||
@@ -704,19 +723,21 @@ function App() {
   function pickIncompatibleAsset(assetId: string, kind: AssetKind) {
     if (!workspace) return;
     // Default behavior — open a "generate" tab for image inputs and an
-    // "extract" tab for video inputs. Trim is opt-in via the + dropdown.
+    // "extract" tab for video inputs. Trim/stitch are opt-in via the
+    // + dropdown.
     const tabKind: "generate" | "extract" =
       kind === "image" ? "generate" : "extract";
     openNewTab(tabKind, assetId);
   }
 
   function openNewTab(
-    kind: "generate" | "extract" | "trim",
+    kind: "generate" | "extract" | "trim" | "stitch",
     seedInputAssetId: string | null = null,
   ) {
     if (!workspace) return;
     const id = newTabId();
-    const wantsVideoSeed = kind === "extract" || kind === "trim";
+    const wantsVideoSeed =
+      kind === "extract" || kind === "trim" || kind === "stitch";
     const seedAsset = seedInputAssetId
       ? findAsset(workspace, seedInputAssetId)
       : wantsVideoSeed
@@ -729,13 +750,23 @@ function App() {
       tab = { id, kind: "generate", inputAssetId, prompt: DEFAULT_PROMPT };
     } else if (kind === "extract") {
       tab = { id, kind: "extract", inputAssetId, scrubSeconds: null };
-    } else {
+    } else if (kind === "trim") {
       tab = {
         id,
         kind: "trim",
         inputAssetId,
         trimStart: null,
         trimEnd: null,
+      };
+    } else {
+      // Stitch — seed with the chosen asset if one was provided
+      // (e.g. user clicked a video while no tab was active) so the
+      // first slot is filled rather than greeting them with an
+      // empty strip. Empty start is also fine.
+      tab = {
+        id,
+        kind: "stitch",
+        inputAssetIds: inputAssetId ? [inputAssetId] : [],
       };
     }
     setWorkspace({
@@ -829,6 +860,12 @@ function App() {
       const firstLine = (tab.prompt ?? "").trim().split("\n")[0] ?? "";
       return shorten(firstLine, 28) || "New generate";
     }
+    if (tab.kind === "stitch") {
+      const n = tab.inputAssetIds.length;
+      return n === 0
+        ? "New stitch"
+        : `Stitch ${n} clip${n === 1 ? "" : "s"}`;
+    }
     const source = tab.inputAssetId
       ? findAsset(workspace!, tab.inputAssetId)
       : null;
@@ -867,19 +904,24 @@ function App() {
 
   const activeTab = workspace.tabs.find((t) => t.id === workspace.activeTabId);
   const activeKind: AssetKind =
-    activeTab?.kind === "extract" || activeTab?.kind === "trim"
+    activeTab?.kind === "extract" ||
+    activeTab?.kind === "trim" ||
+    activeTab?.kind === "stitch"
       ? "video"
       : "image";
-  const activeInputThumb =
-    activeTab?.inputAssetId
-      ? thumbnailUrls[activeTab.inputAssetId] ?? null
-      : null;
+  // Single-input tabs surface their pick to the gallery for highlight;
+  // stitch is multi-input so no single selection is meaningful.
+  const singleInputAssetId =
+    activeTab && activeTab.kind !== "stitch" ? activeTab.inputAssetId : null;
+  const activeInputThumb = singleInputAssetId
+    ? thumbnailUrls[singleInputAssetId] ?? null
+    : null;
 
   return (
     <main className="flex h-full bg-black text-neutral-200">
       <AssetGallery
         assets={workspace.assets}
-        selectedAssetId={activeTab?.inputAssetId ?? null}
+        selectedAssetId={singleInputAssetId}
         onSelect={selectAssetForActiveTab}
         onRequestDelete={handleAssetDelete}
         activeKind={activeKind}
@@ -1050,6 +1092,20 @@ function App() {
               trimEnd={activeTab.trimEnd}
               onTrimChange={(start, end) =>
                 patchTab(activeTab.id, { trimStart: start, trimEnd: end })
+              }
+              onSave={handleAssetSave}
+            />
+          )}
+
+          {activeTab?.kind === "stitch" && (
+            <StitchTab
+              folderName={folderName}
+              externalRef={workspace.externalRef}
+              workspace={workspace}
+              inputAssetIds={activeTab.inputAssetIds}
+              thumbnailUrls={thumbnailUrls}
+              onChange={(next) =>
+                patchTab(activeTab.id, { inputAssetIds: next })
               }
               onSave={handleAssetSave}
             />

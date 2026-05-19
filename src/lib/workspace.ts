@@ -85,6 +85,15 @@ export type PersistedTab =
       trimStart: number | null;
       trimEnd: number | null;
       userLabel?: string;
+    }
+  | {
+      id: string;
+      kind: "stitch";
+      /** Ordered video asset IDs to concatenate. Duplicates allowed
+       *  — a contractor may want to repeat a clip ("hold this moment"
+       *  effect). Save is gated to len >= 2 in StitchTab. */
+      inputAssetIds: string[];
+      userLabel?: string;
     };
 
 export type Workspace = {
@@ -113,14 +122,13 @@ export function relPathForAsset(
   return `${qdir(folderName, externalRef)}/${asset.filename}`;
 }
 
-/** Asset filename hints. Kept narrow on purpose — `stitched` and `audio`
- *  used to live here as forward-looking placeholders, but the schema
- *  drifted ahead of the UI and confused readers. Add a hint here only
- *  when the corresponding tab kind / AssetKind lands. */
+/** Asset filename hints. Add a hint here only when the corresponding
+ *  tab kind / AssetKind lands. `audio` will follow when narration is
+ *  built; `stitched` lives here now that the Stitch tab is wired. */
 export function generateAssetFilename(args: {
   id: string;
   kind: AssetKind;
-  hint: "source" | "clip" | "frame";
+  hint: "source" | "clip" | "frame" | "stitched";
 }): string {
   const ext = args.kind === "image" ? "jpg" : "mp4";
   return `${args.hint}-${args.id}.${ext}`;

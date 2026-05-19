@@ -6,6 +6,7 @@
 
 import { clsx } from "clsx";
 import type { Asset, AssetKind } from "../lib/workspace";
+import { DRAG_PAYLOAD_MIME, encodeDragPayload } from "../lib/drag";
 
 export function AssetGallery({
   assets,
@@ -160,8 +161,22 @@ function AssetCard({
   onClick: () => void;
   onDelete: () => void;
 }) {
+  // Only video assets are draggable today — the Stitch tab is the only
+  // drop target and it consumes videos. Source images stay non-draggable
+  // (they're a single-instance anchor, dragging them adds no value and
+  // browsers paint a confusing drag image for protected items).
+  const draggable = asset.kind === "video";
   return (
     <div
+      draggable={draggable}
+      onDragStart={(e) => {
+        if (!draggable) return;
+        e.dataTransfer.setData(
+          DRAG_PAYLOAD_MIME,
+          encodeDragPayload({ source: "gallery", assetId: asset.id }),
+        );
+        e.dataTransfer.effectAllowed = "copy";
+      }}
       className={clsx(
         "group relative flex items-center gap-3 rounded-lg p-2 transition-colors",
         isSelected
@@ -169,6 +184,7 @@ function AssetCard({
           : isCompatible
             ? "hover:bg-neutral-900"
             : "hover:bg-neutral-900/50",
+        draggable && "cursor-grab active:cursor-grabbing",
       )}
     >
       <button
@@ -183,16 +199,29 @@ function AssetCard({
         }
       >
         <div className="h-12 w-16 shrink-0 overflow-hidden rounded bg-neutral-900">
-          {thumbnailUrl ? (
+          {!thumbnailUrl ? (
+            <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-600">
+              {asset.kind === "image" ? "img" : "mp4"}
+            </div>
+          ) : asset.kind === "image" ? (
             <img
               src={thumbnailUrl}
               alt={asset.label}
               className="h-full w-full object-cover"
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center text-[10px] text-neutral-600">
-              {asset.kind === "image" ? "img" : "mp4"}
-            </div>
+            // <img> with an .mp4 src renders nothing. Use <video> +
+            // seek-to-frame-0 trick so the gallery row shows the
+            // opening frame instead of a black square.
+            <video
+              src={thumbnailUrl}
+              muted
+              preload="metadata"
+              onLoadedMetadata={(e) => {
+                e.currentTarget.currentTime = 0.1;
+              }}
+              className="h-full w-full object-cover"
+            />
           )}
         </div>
         <div className="min-w-0 flex-1">

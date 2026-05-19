@@ -23,7 +23,7 @@ export function TabStrip({
   unsavedTabIds: Set<string>;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
-  onNew: (kind: "generate" | "extract" | "trim") => void;
+  onNew: (kind: "generate" | "extract" | "trim" | "stitch") => void;
   tabTitle: (tab: PersistedTab) => string;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -57,7 +57,9 @@ export function TabStrip({
                 ? "🎬"
                 : tab.kind === "extract"
                   ? "✂️"
-                  : "🎞️"
+                  : tab.kind === "trim"
+                    ? "🎞️"
+                    : "🔗"
             }
             title={tabTitle(tab)}
             onActivate={() => onActivate(tab.id)}
@@ -99,6 +101,14 @@ export function TabStrip({
               }}
             >
               🎞️ New Trim clip
+            </MenuItem>
+            <MenuItem
+              onSelect={() => {
+                setMenuOpen(false);
+                onNew("stitch");
+              }}
+            >
+              🔗 New Stitch clips
             </MenuItem>
           </div>
         )}

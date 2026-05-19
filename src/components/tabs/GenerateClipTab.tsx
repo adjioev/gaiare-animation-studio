@@ -10,7 +10,11 @@ import {
   remove,
   rename,
 } from "@tauri-apps/plugin-fs";
-import { runWan, type Prediction } from "../../lib/replicate";
+import {
+  runWan,
+  uploadFileToReplicate,
+  type Prediction,
+} from "../../lib/replicate";
 import {
   absPath,
   asset,
@@ -90,10 +94,10 @@ export function GenerateClipTab({
   }, []);
 
   async function generate() {
-    if (!inputAssetPublicUrl) {
+    if (!inputAsset) {
       setStatus({
         state: "error",
-        message: "Input image has no public URL (upload pipeline pending)",
+        message: "Pick an input image from the gallery first.",
       });
       return;
     }
@@ -103,13 +107,29 @@ export function GenerateClipTab({
     const controller = new AbortController();
     abortRef.current = controller;
 
-    setStatus({ state: "running", message: "Replicate (Wan 2.2 i2v fast)…" });
     setPreviewUrl(null);
     onPreviewChange(false);
 
     try {
+      // Resolve the URL Wan will fetch the start frame from. The
+      // workspace's source image already has a public CDN URL; every
+      // other asset (extracted frames, trimmed clips) lives only on
+      // disk and needs to be uploaded to Replicate's Files API first.
+      let imageUrl: string;
+      if (inputAssetPublicUrl) {
+        imageUrl = inputAssetPublicUrl;
+      } else {
+        setStatus({ state: "running", message: "uploading frame…" });
+        const localAbs = await absPath(
+          relPathForAsset(folderName, externalRef, inputAsset),
+        );
+        imageUrl = await uploadFileToReplicate(localAbs);
+        if (controller.signal.aborted) return;
+      }
+
+      setStatus({ state: "running", message: "Replicate (Wan 2.2 i2v fast)…" });
       const url = await runWan(
-        { image: inputAssetPublicUrl, prompt },
+        { image: imageUrl, prompt },
         {
           signal: controller.signal,
           onTick: (p: Prediction<string>) =>
@@ -250,8 +270,8 @@ export function GenerateClipTab({
                 </p>
               )}
               {!inputAssetPublicUrl && (
-                <p className="mt-1 text-[11px] text-amber-300/80">
-                  This asset has no public URL yet — upload pipeline pending.
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  Local asset — will be uploaded to Replicate before Wan runs.
                 </p>
               )}
             </div>

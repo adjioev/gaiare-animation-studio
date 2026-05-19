@@ -9,6 +9,27 @@
 // required from contractors.
 
 import { Command } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
+
+/**
+ * Reject absolute paths that don't live under the user's Documents
+ * folder, and canonicalise them so ffmpeg never sees `..` segments.
+ * Delegates to a Rust command that uses `std::fs::canonicalize` — the
+ * earlier TS-only `startsWith` check was bypassable two ways: `..` in
+ * the relative path produced a string that lexically started with the
+ * Documents root but resolved outside, and a sibling directory named
+ * e.g. `DocumentsEvil` matched as a string prefix. Both are
+ * theoretical-only with a trusted renderer, but the explicit goal of
+ * the guard was defence against a future bug — so it should actually
+ * hold.
+ *
+ * Returns the canonicalised path. Callers should use the return value
+ * for the subsequent `Command::sidecar` invocation, not the original
+ * input.
+ */
+export async function assertSafeDocumentPath(absPath: string): Promise<string> {
+  return invoke<string>("assert_safe_document_path_cmd", { absPath });
+}
 
 /**
  * Duration of a video file in seconds, via ffprobe. Used to clamp the
@@ -36,6 +57,88 @@ export async function probeDurationSeconds(videoAbsPath: string): Promise<number
   return d;
 }
 
+/**
+ * Concatenate a list of clips into a single video, in order. Re-encodes
+ * with libx264 so the result is bulletproof against minor differences
+ * between inputs (varying GOP structure, slight pix_fmt drift, etc.).
+ * `-r 16` forces constant 16 fps output — without it, concat'd clips
+ * with slightly mismatched timestamps would produce a variable-fps
+ * file that browsers play back at the wrong speed.
+ *
+ * Each input path is run through `assertSafeDocumentPath` to keep ffmpeg
+ * from touching anything outside the Documents tree.
+ */
+export async function stitchClips(args: {
+  inputAbsPaths: string[];
+  outputAbsPath: string;
+}): Promise<void> {
+  if (args.inputAbsPaths.length < 2) {
+    throw new Error("stitchClips needs at least 2 inputs");
+  }
+  // Canonicalise every path — use the returned form for the ffmpeg
+  // call so the subprocess sees no `..` segments. Otherwise a value
+  // could pass the prefix check as a string but resolve outside
+  // Documents at the OS level.
+  const safeInputs: string[] = [];
+  for (const p of args.inputAbsPaths) {
+    safeInputs.push(await assertSafeDocumentPath(p));
+  }
+  const safeOutput = await assertSafeDocumentPath(args.outputAbsPath);
+
+  // Build `-i clip1 -i clip2 ...` plus the matching filter graph.
+  // Each input is scaled+padded to a canonical 854×480 before concat:
+  // `concat` filter requires identical dimensions across all streams,
+  // and Wan output / trim re-encode resolutions can drift by a few
+  // pixels between runs (or differ entirely for future user-supplied
+  // clips). `force_original_aspect_ratio=decrease` preserves the
+  // input's aspect ratio; the `pad` fills the rest with black bars.
+  // `setsar=1` normalises sample-aspect to avoid stretched output.
+  const TARGET_W = 854;
+  const TARGET_H = 480;
+  const inputArgs: string[] = [];
+  const filterParts: string[] = [];
+  const concatStreams: string[] = [];
+  for (let i = 0; i < safeInputs.length; i++) {
+    inputArgs.push("-i", safeInputs[i]!);
+    filterParts.push(
+      `[${i}:v]scale=${TARGET_W}:${TARGET_H}:force_original_aspect_ratio=decrease,` +
+        `pad=${TARGET_W}:${TARGET_H}:(ow-iw)/2:(oh-ih)/2,setsar=1[v${i}]`,
+    );
+    concatStreams.push(`[v${i}]`);
+  }
+  filterParts.push(
+    `${concatStreams.join("")}concat=n=${safeInputs.length}:v=1:a=0[v]`,
+  );
+  const filter = filterParts.join(";");
+
+  const out = await Command.sidecar("binaries/ffmpeg", [
+    "-y",
+    ...inputArgs,
+    "-filter_complex",
+    filter,
+    "-map",
+    "[v]",
+    "-r",
+    "16",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "20",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    "-an",
+    safeOutput,
+  ]).execute();
+
+  if (out.code !== 0) {
+    throw new Error(`ffmpeg stitchClips failed: ${ffmpegErrorSummary(out.stderr)}`);
+  }
+}
+
 export async function trimClip(args: {
   videoAbsPath: string;
   startSeconds: number;
@@ -52,10 +155,12 @@ export async function trimClip(args: {
   // Output seek (`-ss` AFTER `-i`) seeks the decoded stream rather
   // than the container, so we land exactly on the asked-for frame.
   const duration = Math.max(0.05, args.endSeconds - args.startSeconds);
+  const safeInput = await assertSafeDocumentPath(args.videoAbsPath);
+  const safeOutput = await assertSafeDocumentPath(args.outputAbsPath);
   const out = await Command.sidecar("binaries/ffmpeg", [
     "-y",
     "-i",
-    args.videoAbsPath,
+    safeInput,
     "-ss",
     String(args.startSeconds),
     "-t",
@@ -71,7 +176,7 @@ export async function trimClip(args: {
     "-movflags",
     "+faststart",
     "-an", // Wan clips have no audio; -an drops any stray empty track
-    args.outputAbsPath,
+    safeOutput,
   ]).execute();
 
   if (out.code !== 0) {
@@ -87,17 +192,19 @@ export async function extractFrame(args: {
   // Input seek (`-ss` before `-i`) is fast but only frame-precise to
   // the nearest keyframe (~0.5 s). For mid-frame picking this is fine
   // — contractors choose the timestamp by eye, not to a single frame.
+  const safeInput = await assertSafeDocumentPath(args.videoAbsPath);
+  const safeOutput = await assertSafeDocumentPath(args.outputAbsPath);
   const out = await Command.sidecar("binaries/ffmpeg", [
     "-y",
     "-ss",
     String(args.timestampSeconds),
     "-i",
-    args.videoAbsPath,
+    safeInput,
     "-frames:v",
     "1",
     "-q:v",
     "2",
-    args.outputAbsPath,
+    safeOutput,
   ]).execute();
 
   if (out.code !== 0) {
