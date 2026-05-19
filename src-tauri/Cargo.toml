@@ -26,4 +26,19 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Rust-side HTTP client for Replicate proxy commands. Reading the
+# REPLICATE_API_TOKEN env var in the Rust process means the secret
+# never lands in the renderer's JS bundle.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["time"] }
+url = "2"
+# `dotenvy` (the maintained fork of `dotenv`) picks up the same `.env`
+# file the Vite dev server reads, so local dev works the same way.
+# In production builds (`pnpm tauri build`) the env var must be set
+# via the OS / build system before bundling — there's no fallback.
+dotenvy = "0.15"
+# Cross-platform known-folder lookup (Documents, home) for the
+# production-build .env fallback paths — `dotenvy::dotenv()` alone
+# can't find `.env` from a packaged `.app` whose cwd is `/`.
+dirs = "5"
 
