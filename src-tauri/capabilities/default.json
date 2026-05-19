@@ -1,0 +1,98 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "dialog:default",
+    "fs:default",
+
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/.last-workspace" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/.last-workspace" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/.last-workspace" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-rename",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "$HOME/Documents/gaiare-animation-studio" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/*" },
+        { "path": "$HOME/Documents/gaiare-animation-studio/**" }
+      ]
+    },
+
+    "http:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.replicate.com/*" },
+        { "url": "https://replicate.delivery/*" },
+        { "url": "https://*.replicate.delivery/*" },
+        { "url": "https://hel1.your-objectstorage.com/*" },
+        { "url": "https://api.elevenlabs.io/*" },
+        { "url": "https://api.us.elevenlabs.io/*" }
+      ]
+    },
+
+    "shell:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "ffmpeg",
+          "cmd": "ffmpeg",
+          "args": true
+        },
+        {
+          "name": "ffprobe",
+          "cmd": "ffprobe",
+          "args": true
+        }
+      ]
+    }
+  ]
+}
