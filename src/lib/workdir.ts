@@ -1,95 +1,93 @@
-// Local working directory: every question gets a subfolder where raw
-// clips, mid-frames, stitched videos, and narration audio live until
-// the contractor approves the final cut and we publish to S3.
+// Local working directory: every question gets a subfolder under the
+// configured workspace folder. The folder name is configurable via
+// settings (see `lib/settings.ts`); the parent is always the user's
+// Documents directory (cross-platform via Tauri's BaseDirectory).
 //
-// Path: ~/Documents/gaiare-animation-studio/q{externalRef}/
-//   ├─ source.jpg              (downloaded from CDN)
-//   ├─ clip1_v1.mp4 / clip1.mp4 (latest)
-//   ├─ mid_frame.jpg
-//   ├─ clip2.mp4
-//   ├─ stitched-silent.mp4
-//   ├─ narration_en.mp3
-//   └─ final_en.mp4
+// Path: <Documents>/<folderName>/q<externalRef>/
+//   ├─ source-<id>.jpg
+//   ├─ preview-<tabId>.mp4
+//   ├─ clip-<id>.mp4
+//   ├─ frame-<id>.jpg
+//   └─ workspace.json
+//
+// Absolute paths used to be built with string concatenation
+// (`${home}/Documents/${rel}`), which on Windows produced mixed
+// separators (`C:\Users\...\/Documents/`). All absolute-path
+// construction now goes through Tauri's `path.join()` API which
+// uses native separators.
 
 import {
   BaseDirectory,
   exists,
   mkdir,
   writeFile,
-  remove,
 } from "@tauri-apps/plugin-fs";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { documentDir, join } from "@tauri-apps/api/path";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
-const ROOT = "gaiare-animation-studio";
-
-export function qdir(externalRef: string): string {
-  return `${ROOT}/q${externalRef}`;
+/** Relative-to-Documents path of a question's working directory. */
+export function qdir(folderName: string, externalRef: string): string {
+  return `${folderName}/q${externalRef}`;
 }
 
-/**
- * Ensure the working directory for a question exists.
- */
-export async function ensureWorkdir(externalRef: string): Promise<void> {
-  const dir = qdir(externalRef);
+export async function ensureWorkdir(
+  folderName: string,
+  externalRef: string,
+): Promise<void> {
+  const dir = qdir(folderName, externalRef);
   if (!(await exists(dir, { baseDir: BaseDirectory.Document }))) {
     await mkdir(dir, { baseDir: BaseDirectory.Document, recursive: true });
   }
 }
 
 /**
- * Download a remote URL and write it to the question's working dir
- * under `filename`. Returns the relative path inside `Document`
- * (callers compose with `BaseDirectory.Document` for subsequent fs ops).
+ * Download a remote URL into the question's working directory.
+ * Returns the relative path inside `BaseDirectory.Document` — pair
+ * with `BaseDirectory.Document` for subsequent fs-plugin calls, or
+ * with `absPath()` for shell commands.
  */
 export async function downloadInto(args: {
+  folderName: string;
   externalRef: string;
   filename: string;
   url: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  await ensureWorkdir(args.externalRef);
-  const res = await tauriFetch(args.url);
+  await ensureWorkdir(args.folderName, args.externalRef);
+  const res = await tauriFetch(args.url, { signal: args.signal });
   if (!res.ok) {
     throw new Error(`Download failed: ${res.status} ${args.url}`);
   }
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const relPath = `${qdir(args.externalRef)}/${args.filename}`;
+  const relPath = `${qdir(args.folderName, args.externalRef)}/${args.filename}`;
   await writeFile(relPath, bytes, { baseDir: BaseDirectory.Document });
   return relPath;
 }
 
-export async function removeFile(relPath: string): Promise<void> {
-  if (await exists(relPath, { baseDir: BaseDirectory.Document })) {
-    await remove(relPath, { baseDir: BaseDirectory.Document });
-  }
-}
-
 /**
  * Resolve a relative-to-Documents path to a `convertFileSrc` URL the
- * webview can render in an `<img>` / `<video>` tag without copying
- * bytes through JS. Appends a cache-bust query param so re-running
- * a step that overwrites the same file (e.g. re-extracting a mid-frame
- * to `mid_frame.jpg`) actually refreshes the preview — without it the
- * webview happily serves the previous bytes from cache.
+ * webview can render in an `<img>` / `<video>` tag. Cache-busted with
+ * `?t=<now>` so re-running a step that overwrites the same file
+ * actually refreshes the preview.
  */
-import { homeDir } from "@tauri-apps/api/path";
-import { convertFileSrc } from "@tauri-apps/api/core";
-
 export async function asset(relPath: string): Promise<string> {
-  // BaseDirectory.Document = ~/Documents on macOS; compose absolute path.
-  const home = await homeDir();
-  // Tauri 2 normalises separators; `homeDir` returns no trailing slash.
-  const abs = `${home}/Documents/${relPath}`;
+  const abs = await absPath(relPath);
   const url = convertFileSrc(abs);
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}t=${Date.now()}`;
 }
 
 /**
- * Absolute filesystem path for shell commands (ffmpeg etc.) — relative
- * paths inside Documents are convenient for fs plugin, but ffmpeg needs
- * a real path on disk.
+ * Absolute filesystem path for shell commands (ffmpeg etc.). Uses
+ * Tauri's `documentDir()` for the platform-native Documents folder
+ * (respects Windows OneDrive redirection, macOS sandbox container)
+ * and `join()` for native-separator path composition.
  */
 export async function absPath(relPath: string): Promise<string> {
-  const home = await homeDir();
-  return `${home}/Documents/${relPath}`;
+  const docDir = await documentDir();
+  // `relPath` is always built with forward slashes internally; split
+  // and re-join so the final string uses native separators on Windows.
+  const segments = relPath.split("/").filter(Boolean);
+  return join(docDir, ...segments);
 }

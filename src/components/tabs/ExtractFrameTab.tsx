@@ -1,16 +1,11 @@
-// Extract-frame tab — picks a video asset, scrubs through it with a
-// native `<video>` element (no ffmpeg until commit), and writes the
-// chosen frame to disk as a new image asset on Save.
+// Extract-frame panel — controlled component. Selected video and scrub
+// position are persisted on the parent tab record; the scrubbing video
+// element + ffmpeg invocation stay session-local.
 
 import { useEffect, useRef, useState } from "react";
 import { absPath, asset } from "../../lib/workdir";
-import { extractFrame } from "../../lib/ffmpeg";
-import {
-  Button,
-  StatusPill,
-  errorMessage,
-  type StatusState,
-} from "../ui";
+import { extractFrame, probeDurationSeconds } from "../../lib/ffmpeg";
+import { Button, StatusPill, errorMessage, type StatusState } from "../ui";
 import {
   generateAssetFilename,
   newAssetId,
@@ -19,63 +14,74 @@ import {
 } from "../../lib/workspace";
 
 type Status = { state: StatusState; message?: string };
-const IDLE: Status = { state: "idle" };
 
 export function ExtractFrameTab({
+  folderName,
   externalRef,
-  selectedVideo,
-  selectedVideoUrl,
+  inputVideo,
+  inputVideoUrl,
+  scrubSeconds,
+  onScrubChange,
   onSave,
 }: {
+  folderName: string;
   externalRef: string;
-  selectedVideo: Asset | null;
-  /** `asset://` URL of the selected video — what the scrubbing `<video>`
-   *  element loads. */
-  selectedVideoUrl: string | null;
+  inputVideo: Asset | null;
+  inputVideoUrl: string | null;
+  /** `null` = not yet seeded (use mid-clip on first mount). 0 is a
+   *  legitimate value (extracting the opening frame) — don't use it
+   *  as a sentinel. */
+  scrubSeconds: number | null;
+  onScrubChange: (next: number) => void;
   onSave: (asset: Asset) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<Status>(IDLE);
-  const [seconds, setSeconds] = useState(0);
+  const [status, setStatus] = useState<Status>({ state: "idle" });
   const [durationSec, setDurationSec] = useState<number | null>(null);
   const [savedFrameUrl, setSavedFrameUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Reset when video changes
+  // Reset session state when input video changes.
   useEffect(() => {
-    setStatus(IDLE);
-    setSeconds(selectedVideo?.durationSec ? selectedVideo.durationSec / 2 : 0);
-    setDurationSec(selectedVideo?.durationSec ?? null);
+    setStatus({ state: "idle" });
+    setDurationSec(inputVideo?.durationSec ?? null);
     setSavedFrameUrl(null);
-  }, [selectedVideo?.id]);
+  }, [inputVideo?.id]);
+
+  /** Render-time effective scrub position: persisted value if set,
+   *  otherwise the mid-clip default. Slider edits go through
+   *  `onScrubChange` which writes the persisted value. */
+  const effectiveSeconds =
+    scrubSeconds ?? (durationSec ? durationSec / 2 : 0);
 
   async function saveFrame() {
-    if (!selectedVideo) return;
+    if (!inputVideo) return;
     setStatus({ state: "running", message: "ffmpeg extracting…" });
     const id = newAssetId();
     const filename = generateAssetFilename({ id, kind: "image", hint: "frame" });
-    const targetRel = relPathForAsset(externalRef, {
+    const targetRel = relPathForAsset(folderName, externalRef, {
       id,
       kind: "image",
       filename,
     } as Asset);
     try {
       const inAbs = await absPath(
-        relPathForAsset(externalRef, selectedVideo),
+        relPathForAsset(folderName, externalRef, inputVideo),
       );
       const outAbs = await absPath(targetRel);
       await extractFrame({
         videoAbsPath: inAbs,
-        timestampSeconds: seconds,
+        timestampSeconds: effectiveSeconds,
         outputAbsPath: outAbs,
       });
       const newAsset: Asset = {
         id,
         kind: "image",
         filename,
-        label: `Frame @ ${seconds.toFixed(2)}s from ${selectedVideo.label}`,
-        parentAssetIds: [selectedVideo.id],
+        label: `Frame @ ${effectiveSeconds.toFixed(2)}s from ${inputVideo.label}`,
+        parentAssetIds: [inputVideo.id],
         createdAt: Date.now(),
       };
+      // Awaited persistence — see autosave-race note in App.tsx.
       await onSave(newAsset);
       setSavedFrameUrl(await asset(targetRel));
       setStatus({ state: "done", message: "saved to gallery" });
@@ -91,34 +97,51 @@ export function ExtractFrameTab({
         <StatusPill state={status.state} message={status.message} />
       </header>
 
-      {!selectedVideo ? (
+      {!inputVideo ? (
         <div className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-950 p-8 text-center text-sm text-neutral-500">
           Pick a video from the sidebar to scrub for a frame.
         </div>
       ) : (
         <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
           <p className="mb-3 text-xs uppercase tracking-wide text-neutral-500">
-            Source video · {selectedVideo.label}
+            Source video · {inputVideo.label}
           </p>
 
-          {selectedVideoUrl && (
+          {inputVideoUrl && (
             <video
               ref={videoRef}
-              src={selectedVideoUrl}
+              src={inputVideoUrl}
               preload="auto"
               muted
               playsInline
-              onLoadedMetadata={(e) => {
-                const d = e.currentTarget.duration;
-                if (Number.isFinite(d) && d > 0) {
-                  setDurationSec(d);
-                  const start = Math.max(
-                    0,
-                    Math.min(seconds || d / 2, d - 0.05),
-                  );
-                  setSeconds(start);
-                  e.currentTarget.currentTime = start;
+              onLoadedMetadata={async (e) => {
+                let d = e.currentTarget.duration;
+                // Some MP4s (notably Wan output before remux) lack a
+                // moov atom hint, so `<video>` reports `Infinity` on
+                // metadata. Fall back to ffprobe in that case so the
+                // slider doesn't silently cap at the fallback max for
+                // the rest of the session.
+                if (!Number.isFinite(d) || d <= 0) {
+                  if (inputVideo) {
+                    try {
+                      const abs = await absPath(
+                        relPathForAsset(folderName, externalRef, inputVideo),
+                      );
+                      d = await probeDurationSeconds(abs);
+                    } catch {
+                      return;
+                    }
+                  } else {
+                    return;
+                  }
                 }
+                setDurationSec(d);
+                // Seed only when the persisted value is null —
+                // legitimate 0 (opening frame) must survive.
+                const seeded = scrubSeconds ?? d / 2;
+                const start = Math.max(0, Math.min(seeded, d - 0.05));
+                if (scrubSeconds === null) onScrubChange(start);
+                e.currentTarget.currentTime = start;
               }}
               className="w-full max-w-2xl rounded-lg border border-neutral-800"
             />
@@ -130,10 +153,10 @@ export function ExtractFrameTab({
               min={0}
               max={durationSec ?? 5}
               step={1 / 60}
-              value={seconds}
+              value={effectiveSeconds}
               onChange={(e) => {
                 const v = Number(e.currentTarget.value);
-                setSeconds(v);
+                onScrubChange(v);
                 if (videoRef.current) {
                   videoRef.current.currentTime = v;
                 }
@@ -141,21 +164,23 @@ export function ExtractFrameTab({
               className="flex-1 accent-indigo-500"
             />
             <span className="w-28 text-right font-mono text-xs text-neutral-400">
-              {seconds.toFixed(2)} / {durationSec ? durationSec.toFixed(2) : "?"} s
+              {effectiveSeconds.toFixed(2)} /{" "}
+              {durationSec ? durationSec.toFixed(2) : "?"} s
             </span>
           </div>
 
           <div className="mt-4">
-            <Button onClick={saveFrame} disabled={!durationSec}>
-              Save frame to assets
+            <Button
+              onClick={saveFrame}
+              disabled={!durationSec || status.state === "running"}
+            >
+              {status.state === "running" ? "Extracting…" : "Save frame to assets"}
             </Button>
           </div>
 
           {savedFrameUrl && (
             <div className="mt-4">
-              <p className="mb-1 text-xs text-neutral-500">
-                Last saved frame:
-              </p>
+              <p className="mb-1 text-xs text-neutral-500">Last saved frame:</p>
               <img
                 src={savedFrameUrl}
                 alt="extracted frame"

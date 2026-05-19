@@ -31,10 +31,9 @@ export default defineConfig(async () => ({
     },
   },
 
-  // Allow legacy non-VITE_-prefixed secrets from the Mastra `.env` to be
-  // referenced via `import.meta.env`. Only acceptable for a local dev
-  // tool — Vite bakes these into the client bundle at build time, so
-  // every prefix listed here ships to the renderer process. Production
-  // builds should route these calls through `next-server` instead.
-  envPrefix: ["VITE_", "REPLICATE_", "ELEVENLABS_", "OPENAI_", "ANTHROPIC_"],
+  // Only `VITE_*` env vars are exposed to the renderer. Replicate /
+  // ElevenLabs / model-provider tokens stay on the Rust side (loaded
+  // from `.env` via dotenvy in `src-tauri/src/lib.rs`) and are read
+  // exclusively through `#[tauri::command]` proxies.
+  envPrefix: ["VITE_"],
 }));

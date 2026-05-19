@@ -91,13 +91,17 @@ export function StatusPill({
   state: StatusState;
   message?: string;
 }) {
+  // Idle without a message renders nothing — the section is "clean",
+  // no pill earns its real estate.
   if (state === "idle" && !message) return null;
-  const tone = {
-    done: "bg-emerald-900/40 text-emerald-300",
-    running: "bg-amber-900/40 text-amber-200",
-    error: "bg-rose-900/40 text-rose-300",
-    idle: "bg-neutral-800 text-neutral-500",
-  }[state];
+  const tone =
+    state === "done"
+      ? "bg-emerald-900/40 text-emerald-300"
+      : state === "running"
+        ? "bg-amber-900/40 text-amber-200"
+        : state === "error"
+          ? "bg-rose-900/40 text-rose-300"
+          : "bg-neutral-800 text-neutral-500";
   const text = message ? `${state} · ${message}` : state;
   return (
     <span
@@ -107,6 +111,11 @@ export function StatusPill({
       {text}
     </span>
   );
+}
+
+/** Truncate-with-ellipsis. Used by tab titles and labels. */
+export function shorten(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
 export function errorMessage(e: unknown): string {

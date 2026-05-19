@@ -21,6 +21,12 @@ dist-ssr
 /work/
 /scratch/
 
+# Sidecar binaries — downloaded per-platform via
+# `scripts/download-ffmpeg.mjs` on `pnpm install`. Don't commit them
+# (~30 MB each, platform-specific) — the postinstall hook regenerates
+# what each host needs.
+/src-tauri/binaries/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
