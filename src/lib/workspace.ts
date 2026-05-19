@@ -96,6 +96,44 @@ export type PersistedTab =
       userLabel?: string;
     };
 
+/** A single turn in the AI prompt-author chat. Lives per-workspace so
+ *  the assistant remembers the conversation across tab switches — the
+ *  user keeps iterating on the same animation idea even if they hop
+ *  between Generate / Extract / Trim tabs to set up the next attempt. */
+export type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  /** When set, the renderer snapshots which tab was active when this
+   *  message was sent. The assistant uses it to ground "the prompt" /
+   *  "the input frame" references — without it the chat is blind to
+   *  the studio state. */
+  tabContext?: {
+    tabKind: "generate" | "extract" | "trim" | "stitch";
+    tabId: string;
+    /** For generate: the prompt text at send-time. */
+    prompt?: string;
+    /** For generate / extract / trim: the input asset's label. */
+    inputAssetLabel?: string;
+  };
+  /** Cumulative token cost so the UI can render "this session ate $X". */
+  promptTokens?: number;
+  completionTokens?: number;
+  /** 6-char hash of the skills doc (`src/skills/wan-i2v.md`) that
+   *  drove the assistant for this turn. When a regression turns out
+   *  to be caused by a skills edit, you read the fingerprint off
+   *  workspace.json and `git log src/skills/wan-i2v.md` lines up the
+   *  diff. Set only on assistant messages — user didn't author the
+   *  skills, only the assistant turn was driven by them. */
+  skillsFingerprint?: string;
+  /** Fireworks `finish_reason` for assistant messages — `"stop"`
+   *  (clean), `"length"` (truncated by max_tokens), `"content_filter"`,
+   *  etc. UI surfaces a warning when not `"stop"` so the user knows
+   *  the bubble may be cut off mid-thought. */
+  finishReason?: string;
+  createdAt: number;
+};
+
 export type Workspace = {
   version: number;
   externalRef: string;
@@ -103,6 +141,10 @@ export type Workspace = {
   assets: Asset[];
   tabs: PersistedTab[];
   activeTabId: string | null;
+  /** AI prompt-author conversation. Optional for backwards compat —
+   *  old workspaces load with an empty chat. Per-workspace because the
+   *  conversation thread is tied to one question's animation work. */
+  chat?: ChatMessage[];
   updatedAt: number;
 };
 
@@ -111,6 +153,10 @@ export function newAssetId(): string {
 }
 
 export function newTabId(): string {
+  return crypto.randomUUID();
+}
+
+export function newChatMessageId(): string {
   return crypto.randomUUID();
 }
 

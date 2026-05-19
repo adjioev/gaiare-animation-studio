@@ -67,16 +67,19 @@ export function Textarea({
   value,
   onChange,
   rows = 8,
+  placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
   rows?: number;
+  placeholder?: string;
 }) {
   return (
     <textarea
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
       rows={rows}
+      placeholder={placeholder}
       className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 font-mono text-sm leading-relaxed text-neutral-200 outline-none focus:border-neutral-600"
     />
   );
@@ -120,5 +123,18 @@ export function shorten(s: string, n: number): string {
 
 export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  // Tauri's invoke rejects with `{ message: "..." }` (plain object,
+  // not Error). `String(obj)` would render that as "[object Object]"
+  // — useless to the user. Pull `message` if present, otherwise JSON.
+  if (typeof e === "object" && e !== null) {
+    const m = (e as { message?: unknown }).message;
+    if (typeof m === "string") return m;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      // circular ref or non-serialisable — fall through
+    }
+  }
   return String(e);
 }

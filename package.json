@@ -9,8 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "setup-ffmpeg": "node scripts/download-ffmpeg.mjs --strict",
-    "predev": "node scripts/download-ffmpeg.mjs --strict",
-    "prebuild": "node scripts/download-ffmpeg.mjs --strict",
+    "check-skills": "node scripts/check-skills-size.mjs",
+    "predev": "node scripts/download-ffmpeg.mjs --strict && node scripts/check-skills-size.mjs",
+    "prebuild": "node scripts/download-ffmpeg.mjs --strict && node scripts/check-skills-size.mjs",
     "postinstall": "node scripts/download-ffmpeg.mjs"
   },
   "dependencies": {

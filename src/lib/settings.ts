@@ -23,6 +23,14 @@ export type Settings = {
    *  authenticate — purely advisory ("Anna is editing q14") so two
    *  contractors don't clobber each other in a small team. */
   contractorId?: string;
+  /** Hide the AI prompt author side panel. Defaults to false (panel
+   *  shown). Persisted across launches so the user's last preference
+   *  sticks. */
+  chatPanelCollapsed?: boolean;
+  /** Pixel width of the AI prompt author side panel when expanded.
+   *  Defaults to 384 (the original `w-96`). Persisted on resize so
+   *  the contractor's preferred working width survives restarts. */
+  chatPanelWidth?: number;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
