@@ -672,6 +672,10 @@ function App() {
     let next = removeAsset(workspace, id);
     next = {
       ...next,
+      // Drop the deleted id from the tag queue too — otherwise its
+      // slot would still consume a position in the array, shifting
+      // later tagged cards' badge numbers off by one.
+      taggedAssetIds: (next.taggedAssetIds ?? []).filter((x) => x !== id),
       tabs: next.tabs.map((t) => {
         // Stitch holds a list; drop every occurrence of the deleted id.
         if (t.kind === "stitch") {
@@ -829,6 +833,62 @@ function App() {
     });
   }
 
+  // ─── Asset tagging (for batch ops like Stitch append) ────────────
+
+  // Functional setters throughout — the `T` key auto-repeats while held
+  // and React batches state updates, so reading captured `workspace`
+  // would lose toggles when two events fire before the first render
+  // commits. `setWorkspace((prev) => ...)` always sees the freshest
+  // state.
+
+  function toggleAssetTag(id: string) {
+    setWorkspace((ws) => {
+      if (!ws) return ws;
+      // Tagging is only meaningful for videos (Stitch is the only
+      // consumer). Allowing image tags would create badges that
+      // never produce a visible action — confusing.
+      const asset = ws.assets.find((a) => a.id === id);
+      if (asset?.kind !== "video") return ws;
+      const current = ws.taggedAssetIds ?? [];
+      const next = current.includes(id)
+        ? current.filter((x) => x !== id)
+        : [...current, id];
+      return { ...ws, taggedAssetIds: next };
+    });
+  }
+
+  function clearAssetTags() {
+    setWorkspace((ws) => (ws ? { ...ws, taggedAssetIds: [] } : ws));
+  }
+
+  /** Append all tagged VIDEO assets (in order) to the active Stitch
+   *  tab. No-op if there's no Stitch tab active. Tags are cleared
+   *  after — they were a transient queue, not a long-lived label. */
+  function appendTaggedToStitch() {
+    setWorkspace((ws) => {
+      if (!ws?.activeTabId) return ws;
+      const active = ws.tabs.find((t) => t.id === ws.activeTabId);
+      if (!active || active.kind !== "stitch") return ws;
+      const taggedVideos = (ws.taggedAssetIds ?? []).filter((id) => {
+        const a = ws.assets.find((x) => x.id === id);
+        return a?.kind === "video";
+      });
+      if (taggedVideos.length === 0) return ws;
+      return {
+        ...ws,
+        tabs: ws.tabs.map((t) =>
+          t.id === active.id
+            ? ({
+                ...t,
+                inputAssetIds: [...active.inputAssetIds, ...taggedVideos],
+              } as PersistedTab)
+            : t,
+        ),
+        taggedAssetIds: [],
+      };
+    });
+  }
+
   // ─── AI chat ───────────────────────────────────────────────────────
 
   function appendChatMessage(msg: ChatMessage) {
@@ -958,6 +1018,9 @@ function App() {
         activeKind={activeKind}
         onPickIncompatible={pickIncompatibleAsset}
         onPreview={setViewerAssetId}
+        taggedAssetIds={workspace.taggedAssetIds ?? []}
+        onToggleTag={toggleAssetTag}
+        onClearTags={clearAssetTags}
         thumbnailUrls={thumbnailUrls}
       />
 
@@ -1137,6 +1200,8 @@ function App() {
                 patchTab(activeTab.id, { inputAssetIds: next })
               }
               onSave={handleAssetSave}
+              taggedAssetIds={workspace.taggedAssetIds ?? []}
+              onAppendTagged={appendTaggedToStitch}
             />
           )}
 

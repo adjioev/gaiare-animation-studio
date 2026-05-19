@@ -4,6 +4,7 @@
 // active tab to use the asset. Each card has a delete button (×) that
 // removes the file from disk and the entry from the workspace.
 
+import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import type { Asset, AssetKind } from "../lib/workspace";
 import { DRAG_PAYLOAD_MIME, encodeDragPayload } from "../lib/drag";
@@ -16,6 +17,9 @@ export function AssetGallery({
   activeKind,
   onPickIncompatible,
   onPreview,
+  taggedAssetIds,
+  onToggleTag,
+  onClearTags,
   thumbnailUrls,
 }: {
   assets: Asset[];
@@ -33,19 +37,71 @@ export function AssetGallery({
    *  hover icon — gallery clicks still go to onSelect /
    *  onPickIncompatible as before. */
   onPreview: (id: string) => void;
+  /** Ordered list of "tagged" asset IDs. Each tagged card renders its
+   *  1-indexed position as a badge. Toggling is via the `T` hotkey
+   *  while hovering a card. */
+  taggedAssetIds: string[];
+  onToggleTag: (id: string) => void;
+  onClearTags: () => void;
   thumbnailUrls: Record<string, string>;
 }) {
   const images = assets.filter((a) => a.kind === "image");
   const videos = assets.filter((a) => a.kind === "video");
 
+  // Hover-tracked focused asset id. The `T` hotkey reads this ref to
+  // know which card to tag/untag without forcing the user to click
+  // first (clicking has other side effects — setting input asset,
+  // opening new tab — which we don't want to trigger just for
+  // tagging).
+  const hoveredAssetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "t" && e.key !== "T") return;
+      // Ignore when typing in inputs / textareas / contenteditable —
+      // the user is typing the letter T, not tagging.
+      const t = e.target as Element | null;
+      if (
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        (t && (t as HTMLElement).isContentEditable)
+      ) {
+        return;
+      }
+      const id = hoveredAssetIdRef.current;
+      if (!id) return;
+      e.preventDefault();
+      onToggleTag(id);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onToggleTag]);
+
+  // Map asset id → 1-indexed badge number. Lookup builds once per
+  // render; gallery sizes are small (<50) so the cost is irrelevant.
+  const tagPositionById = new Map<string, number>();
+  taggedAssetIds.forEach((id, i) => tagPositionById.set(id, i + 1));
+
   return (
     <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
       <div className="border-b border-neutral-800 px-4 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
-          Assets
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
+            Assets
+          </h2>
+          {taggedAssetIds.length > 0 && (
+            <button
+              onClick={onClearTags}
+              className="rounded-full bg-indigo-900/30 px-2 py-0.5 text-[10px] uppercase tracking-wider text-indigo-300 hover:bg-indigo-900/50"
+              title="Clear all tags"
+            >
+              Clear tags ({taggedAssetIds.length})
+            </button>
+          )}
+        </div>
         <p className="mt-1 text-[11px] text-neutral-600">
-          Click to use as input · × to delete
+          Click to use as input · × to delete · hover + T to tag for
+          Stitch
         </p>
       </div>
 
@@ -61,6 +117,8 @@ export function AssetGallery({
           onPreview={onPreview}
           activeKind={activeKind}
           thumbnailUrls={thumbnailUrls}
+          tagPositionById={tagPositionById}
+          hoveredAssetIdRef={hoveredAssetIdRef}
           empty="No images yet."
         />
         <Section
@@ -74,6 +132,8 @@ export function AssetGallery({
           onPreview={onPreview}
           activeKind={activeKind}
           thumbnailUrls={thumbnailUrls}
+          tagPositionById={tagPositionById}
+          hoveredAssetIdRef={hoveredAssetIdRef}
           empty="No videos yet — generate one from the Generate Clip tab."
         />
       </div>
@@ -92,6 +152,8 @@ function Section({
   onPreview,
   activeKind,
   thumbnailUrls,
+  tagPositionById,
+  hoveredAssetIdRef,
   empty,
 }: {
   title: string;
@@ -104,6 +166,8 @@ function Section({
   onPreview: (id: string) => void;
   activeKind: AssetKind;
   thumbnailUrls: Record<string, string>;
+  tagPositionById: Map<string, number>;
+  hoveredAssetIdRef: React.MutableRefObject<string | null>;
   empty: string;
 }) {
   return (
@@ -139,6 +203,8 @@ function Section({
                   isSelected={isSelected}
                   isCompatible={isCompatible}
                   thumbnailUrl={thumbnailUrls[asset.id] ?? null}
+                  tagPosition={tagPositionById.get(asset.id) ?? null}
+                  hoveredAssetIdRef={hoveredAssetIdRef}
                   onClick={() =>
                     isCompatible
                       ? onSelect(asset.id)
@@ -161,6 +227,8 @@ function AssetCard({
   isSelected,
   isCompatible,
   thumbnailUrl,
+  tagPosition,
+  hoveredAssetIdRef,
   onClick,
   onDelete,
   onPreview,
@@ -169,6 +237,10 @@ function AssetCard({
   isSelected: boolean;
   isCompatible: boolean;
   thumbnailUrl: string | null;
+  /** 1-indexed badge number when this asset is tagged, null otherwise. */
+  tagPosition: number | null;
+  /** Set on hover so the global `T` hotkey knows which card to act on. */
+  hoveredAssetIdRef: React.MutableRefObject<string | null>;
   onClick: () => void;
   onDelete: () => void;
   onPreview: () => void;
@@ -178,9 +250,30 @@ function AssetCard({
   // (they're a single-instance anchor, dragging them adds no value and
   // browsers paint a confusing drag image for protected items).
   const draggable = asset.kind === "video";
+
+  // If the card unmounts while still hovered (asset deleted, workspace
+  // switched, filter changed) `onMouseLeave` never fires — the ref
+  // would keep the dead id and the next `T` press would tag a
+  // non-existent asset. Belt-and-braces clear on unmount.
+  useEffect(() => {
+    return () => {
+      if (hoveredAssetIdRef.current === asset.id) {
+        hoveredAssetIdRef.current = null;
+      }
+    };
+  }, [asset.id, hoveredAssetIdRef]);
+
   return (
     <div
       draggable={draggable}
+      onMouseEnter={() => {
+        hoveredAssetIdRef.current = asset.id;
+      }}
+      onMouseLeave={() => {
+        if (hoveredAssetIdRef.current === asset.id) {
+          hoveredAssetIdRef.current = null;
+        }
+      }}
       onDragStart={(e) => {
         if (!draggable) return;
         e.dataTransfer.setData(
@@ -196,9 +289,24 @@ function AssetCard({
           : isCompatible
             ? "hover:bg-neutral-900"
             : "hover:bg-neutral-900/50",
+        // Tagged cards get a subtle indigo ring so they're easy to find
+        // at a glance even when not focused.
+        tagPosition !== null && !isSelected && "ring-1 ring-indigo-700/60",
         draggable && "cursor-grab active:cursor-grabbing",
       )}
     >
+      {/* Tag badge — top-left over the thumbnail. Indigo to match the
+          ring + chat panel accents; bold so the number is the first
+          thing your eye lands on. */}
+      {tagPosition !== null && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white shadow"
+          title={`Tagged #${tagPosition} — press T while hovering to untag`}
+        >
+          {tagPosition}
+        </span>
+      )}
       <button
         onClick={onClick}
         className="flex min-w-0 flex-1 items-center gap-3 text-left"

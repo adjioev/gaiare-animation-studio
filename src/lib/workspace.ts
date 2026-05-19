@@ -145,6 +145,15 @@ export type Workspace = {
    *  old workspaces load with an empty chat. Per-workspace because the
    *  conversation thread is tied to one question's animation work. */
   chat?: ChatMessage[];
+  /** Ordered list of video asset IDs the contractor has "tagged" for
+   *  bulk use — primary (currently only) use case: pre-ordering clips
+   *  for the Stitch tab so one click can drop them all in sequence
+   *  instead of drag-by-drag. Position in the array IS the displayed
+   *  number (index 0 → badge "1"). Tagging is one-key (`T` while
+   *  hovering) and persists across reloads. Restricted to
+   *  `kind: "video"` by `toggleAssetTag` because Stitch is the only
+   *  consumer — image badges would never produce a visible action. */
+  taggedAssetIds?: string[];
   updatedAt: number;
 };
 

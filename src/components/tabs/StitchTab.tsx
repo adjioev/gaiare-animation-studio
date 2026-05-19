@@ -35,6 +35,8 @@ export function StitchTab({
   thumbnailUrls,
   onChange,
   onSave,
+  taggedAssetIds,
+  onAppendTagged,
 }: {
   folderName: string;
   externalRef: string;
@@ -45,6 +47,10 @@ export function StitchTab({
   thumbnailUrls: Record<string, string>;
   onChange: (next: string[]) => void;
   onSave: (asset: Asset) => Promise<void>;
+  /** Ordered list of asset IDs the contractor pre-tagged in the
+   *  gallery. The "Append tagged" button below adds them in order. */
+  taggedAssetIds: string[];
+  onAppendTagged: () => void;
 }) {
   const [status, setStatus] = useState<Status>({ state: "idle" });
   const [savedClipUrl, setSavedClipUrl] = useState<string | null>(null);
@@ -212,10 +218,31 @@ export function StitchTab({
       </header>
 
       <div className="rounded-2xl border border-neutral-800 bg-neutral-950 p-6">
-        <p className="mb-3 text-xs uppercase tracking-wide text-neutral-500">
-          Sequence · drag clips from the gallery to add, drag within the
-          strip to reorder
-        </p>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="text-xs uppercase tracking-wide text-neutral-500">
+            Sequence · drag clips from the gallery to add, drag within the
+            strip to reorder
+          </p>
+          {/* Bulk-append from pre-tagged clips. Only video tags count
+              for stitch (image tags are visible in the gallery but
+              skipped here — filtering happens in App.tsx). */}
+          {(() => {
+            const taggedVideos = taggedAssetIds.filter((id) => {
+              const a = workspace.assets.find((x) => x.id === id);
+              return a?.kind === "video";
+            });
+            if (taggedVideos.length === 0) return null;
+            return (
+              <button
+                onClick={onAppendTagged}
+                className="shrink-0 rounded-full bg-indigo-600 px-3 py-1 text-[11px] font-medium uppercase tracking-wider text-white hover:bg-indigo-500"
+                title="Append all tagged clips to the end of the sequence (in order), then clear the tags"
+              >
+                Append {taggedVideos.length} tagged ↘
+              </button>
+            );
+          })()}
+        </div>
 
         {/* Filmstrip — horizontal scroll. The trailing drop zone at
             `index = length` lets the user append by dropping after the
