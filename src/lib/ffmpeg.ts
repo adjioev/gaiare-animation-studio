@@ -36,6 +36,49 @@ export async function probeDurationSeconds(videoAbsPath: string): Promise<number
   return d;
 }
 
+export async function trimClip(args: {
+  videoAbsPath: string;
+  startSeconds: number;
+  endSeconds: number;
+  outputAbsPath: string;
+}): Promise<void> {
+  // Re-encode for frame-accurate cuts. `-c copy` would be ~10× faster
+  // but only cuts on keyframes — Wan i2v output keyframes ~0.5 s apart,
+  // and at 5 s total clip length a half-second drift is 10 % of the
+  // duration. Re-encoding with libx264 -preset veryfast adds ~1-2 s
+  // wall time, which is invisible next to the 30-60 s Wan generation
+  // it follows.
+  //
+  // Output seek (`-ss` AFTER `-i`) seeks the decoded stream rather
+  // than the container, so we land exactly on the asked-for frame.
+  const duration = Math.max(0.05, args.endSeconds - args.startSeconds);
+  const out = await Command.sidecar("binaries/ffmpeg", [
+    "-y",
+    "-i",
+    args.videoAbsPath,
+    "-ss",
+    String(args.startSeconds),
+    "-t",
+    String(duration),
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "20",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    "-an", // Wan clips have no audio; -an drops any stray empty track
+    args.outputAbsPath,
+  ]).execute();
+
+  if (out.code !== 0) {
+    throw new Error(`ffmpeg trimClip failed: ${ffmpegErrorSummary(out.stderr)}`);
+  }
+}
+
 export async function extractFrame(args: {
   videoAbsPath: string;
   timestampSeconds: number;

@@ -16,3 +16,41 @@ body,
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Range slider with overlapping thumbs (TrimClipTab) — make the track
+   transparent (Tailwind handles colored band behind), make the thumbs
+   visible + always on top of each other so neither one is occluded by
+   its sibling's invisible track. */
+.trim-slider {
+  pointer-events: none;
+}
+.trim-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid #6366f1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+}
+.trim-slider::-moz-range-thumb {
+  pointer-events: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 2px solid #6366f1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+}
+.trim-slider::-webkit-slider-runnable-track {
+  background: transparent;
+  height: 6px;
+}
+.trim-slider::-moz-range-track {
+  background: transparent;
+  height: 6px;
+}
