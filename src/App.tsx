@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { BaseDirectory, exists, remove } from "@tauri-apps/plugin-fs";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import {
   asset as resolveAsset,
@@ -35,7 +38,10 @@ import { AssetGallery } from "./components/AssetGallery";
 import { TabStrip } from "./components/TabStrip";
 import { GenerateClipTab } from "./components/tabs/GenerateClipTab";
 import { ExtractFrameTab } from "./components/tabs/ExtractFrameTab";
+import { TrimClipTab } from "./components/tabs/TrimClipTab";
 import { SettingsModal } from "./components/SettingsModal";
+import { ConfirmModal } from "./components/ConfirmModal";
+import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
 
@@ -54,6 +60,22 @@ Static camera, no zoom, no pan. Photorealistic.`;
 function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  /** When set, renders a ConfirmModal. The `onConfirm` callback is the
+   *  destructive action; setting back to `null` dismisses the modal. */
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string | string[];
+    confirmLabel?: string;
+    cancelLabel?: string | null;
+    destructive?: boolean;
+    onConfirm: () => void | Promise<void>;
+    /** Optional cleanup when the user dismisses without confirming
+     *  (Cancel / Escape / backdrop). Used by the quit flow to tell
+     *  Rust to clear its pending flag — otherwise QUIT_PENDING stays
+     *  true and the next Cmd+Q is silently deduped away. */
+    onCancel?: () => void | Promise<void>;
+  } | null>(null);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -263,10 +285,17 @@ function App() {
   // create, asset delete, tab close) call saveWorkspace directly to
   // close the race where this timer's cancellation drops the latest
   // state.
+  //
+  // Indicator timing: the "saving…" pill only appears once the actual
+  // write is in flight, NOT during the 500 ms debounce window. Earlier
+  // we flashed it on every workspace state change, which painted a
+  // continuous "saving…" while the user dragged the frame slider (each
+  // tick is a state update); the indicator was lying because no write
+  // was happening yet — only a pending timer.
   useEffect(() => {
     if (!bootstrapped || !workspace) return;
-    setSaveBlinker("saving");
     const id = window.setTimeout(async () => {
+      setSaveBlinker("saving");
       try {
         await saveWorkspace(folderName, workspace);
         setSaveBlinker("saved");
@@ -279,6 +308,167 @@ function App() {
     }, 500);
     return () => window.clearTimeout(id);
   }, [bootstrapped, workspace, folderName]);
+
+  // Refs mirroring state, so the mount-once effects below can read the
+  // CURRENT values from event callbacks without re-registering listeners
+  // on every state change (which would have leak/duplicate-modal races
+  // around the async `listen()` resolution).
+  const unsavedTabIdsRef = useRef(unsavedTabIds);
+  const confirmRef = useRef(confirm);
+  const settingsOpenRef = useRef(settingsOpen);
+  const newWorkspaceOpenRef = useRef(newWorkspaceOpen);
+  const workspaceRef = useRef(workspace);
+  useEffect(() => {
+    unsavedTabIdsRef.current = unsavedTabIds;
+  }, [unsavedTabIds]);
+  useEffect(() => {
+    confirmRef.current = confirm;
+  }, [confirm]);
+  useEffect(() => {
+    settingsOpenRef.current = settingsOpen;
+  }, [settingsOpen]);
+  useEffect(() => {
+    newWorkspaceOpenRef.current = newWorkspaceOpen;
+  }, [newWorkspaceOpen]);
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  // ─── Quit guard ───────────────────────────────────────────────────
+  //
+  // Two entry paths land here:
+  //
+  //  1. Red-dot window close → `tauri://close-requested` JS event,
+  //     surfaced through `getCurrentWindow().onCloseRequested(...)`.
+  //  2. ⌘Q / menu Quit / system quit on macOS → Rust emits
+  //     `app-quit-requested` event from `on_menu_event` (and as a
+  //     fallback from `RunEvent::ExitRequested`).
+  //
+  // Both funnel through `requestQuit()`. Real exit happens via the
+  // `force_quit` Rust command which sets a Rust-side gate and calls
+  // `app.exit(0)`. Calling `win.destroy()` would leave the app process
+  // alive on macOS (default: closing the last window ≠ quit).
+  //
+  // The effect mounts ONCE. Earlier versions re-registered on every
+  // `unsavedTabIds` change which raced with the async `listen()` —
+  // unlisten-leak + duplicate modals. Now the callback reads current
+  // values from refs.
+  useEffect(() => {
+    const win = getCurrentWindow();
+
+    function requestQuit() {
+      // Stomp guard — if any modal is already open, drop the quit
+      // request rather than overwriting it. The user is mid-decision;
+      // they can press Cmd+Q again after.
+      if (
+        confirmRef.current ||
+        settingsOpenRef.current ||
+        newWorkspaceOpenRef.current
+      ) {
+        return;
+      }
+      const unsavedCount = unsavedTabIdsRef.current.size;
+      const hasUnsaved = unsavedCount > 0;
+      setConfirm({
+        title: hasUnsaved
+          ? "Quit with unsaved previews?"
+          : "Quit Animation Studio?",
+        message: hasUnsaved
+          ? [
+              `${unsavedCount} tab${unsavedCount === 1 ? " has" : "s have"} an unsaved generation preview.`,
+              "Quitting now will discard those previews — they can be regenerated, but the spent API credits won't come back.",
+            ]
+          : [
+              "The workspace is saved. You can pick it back up exactly where you left off next launch.",
+            ],
+        confirmLabel: "Quit",
+        destructive: hasUnsaved,
+        onConfirm: async () => {
+          setConfirm(null);
+          // Arm before force_quit — the Rust side refuses force_quit
+          // unless armed within the last 10 s. This means a future
+          // bug in a tab component invoking `force_quit` directly
+          // can't bypass the confirm modal.
+          try {
+            await invoke("arm_quit");
+            await invoke("force_quit");
+          } catch (e) {
+            console.error("[quit] force_quit failed", e);
+          }
+        },
+        onCancel: async () => {
+          // Tell Rust to clear QUIT_PENDING so the next Cmd+Q gesture
+          // can open a fresh modal. Without this, dismissing → pressing
+          // Cmd+Q again silently dedup's the second request.
+          try {
+            await invoke("cancel_quit");
+          } catch (e) {
+            console.error("[quit] cancel_quit failed", e);
+          }
+        },
+      });
+    }
+
+    // Race-safe async unlisten registration. If the cleanup fires
+    // before `.then` resolves, the resolved unlisten is called
+    // immediately on the post-cleanup path.
+    let unmounted = false;
+    let unlistenClose: (() => void) | null = null;
+    let unlistenQuit: (() => void) | null = null;
+
+    void win
+      .onCloseRequested((event) => {
+        event.preventDefault();
+        requestQuit();
+      })
+      .then((u) => {
+        if (unmounted) u();
+        else unlistenClose = u;
+      });
+
+    void listen("app-quit-requested", () => {
+      requestQuit();
+    }).then((u) => {
+      if (unmounted) u();
+      else unlistenQuit = u;
+    });
+
+    return () => {
+      unmounted = true;
+      unlistenClose?.();
+      unlistenQuit?.();
+    };
+  }, []); // mount-once — refs supply current state
+
+  // ─── Keyboard shortcuts ───────────────────────────────────────────
+  //
+  // VSCode-parity bindings. Cmd/Ctrl+W closes the active tab. Mounted
+  // once; reads `workspace.activeTabId` via ref so we don't rebind on
+  // every tab switch.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      // Don't steal Cmd+W from open modals — the user is in a
+      // confirm/settings/new-workspace flow and the shortcut should
+      // be ignored rather than closing the underlying tab.
+      if (
+        confirmRef.current ||
+        settingsOpenRef.current ||
+        newWorkspaceOpenRef.current
+      ) {
+        return;
+      }
+      if (e.key === "w" || e.key === "W") {
+        const activeId = workspaceRef.current?.activeTabId;
+        if (!activeId) return;
+        e.preventDefault();
+        closeTab(activeId);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []); // mount-once — refs supply current state
 
   // ─── Workspace operations ─────────────────────────────────────────
 
@@ -308,16 +498,18 @@ function App() {
     await refreshThumbnails(ws);
   }
 
-  async function newWorkspace() {
-    const ref = window.prompt("New workspace — external_ref (e.g. 15):");
-    if (!ref?.trim()) return;
-    const url = window.prompt(
-      "Source image URL (CDN, leave empty to set later):",
-    );
+  function newWorkspace() {
+    setNewWorkspaceOpen(true);
+  }
+
+  async function createWorkspaceFromModal(args: {
+    externalRef: string;
+    sourceUrl: string;
+  }) {
     clearWarnings();
     let ws = makeEmptyWorkspace({
-      externalRef: ref.trim(),
-      sourceUrl: url?.trim() ?? "",
+      externalRef: args.externalRef,
+      sourceUrl: args.sourceUrl,
     });
     await ensureWorkdir(folderName, ws.externalRef);
     ws = await ensureSourceAsset(ws);
@@ -414,22 +606,55 @@ function App() {
     await refreshThumbnails(next);
   }
 
-  async function handleAssetDelete(id: string) {
+  function handleAssetDelete(id: string) {
     if (!workspace) return;
     const a = findAsset(workspace, id);
     if (!a) return;
     if (a.role === "source") {
-      window.alert(
-        "The source image is protected — it's the workspace anchor.\nIf you really want to swap it, create a new workspace.",
-      );
+      setConfirm({
+        title: "Source image is protected",
+        message: [
+          "The source image is the workspace anchor — it can't be deleted.",
+          "If you need a different source, create a new workspace instead.",
+        ],
+        confirmLabel: "OK",
+        cancelLabel: null,
+        onConfirm: () => setConfirm(null),
+      });
       return;
     }
-    const ok = window.confirm(
-      `Delete "${a.label}"?\n\nThe file will be removed from disk.`,
-    );
-    if (!ok) return;
+    // Capture filename + externalRef NOW. By the time the user clicks
+    // Confirm, the workspace state could have been replaced (e.g.
+    // background autosave reload, switchWorkspace) and `findAsset`
+    // would return null → filename "" → orphan file on disk while the
+    // entry is pruned from the workspace.
+    const filenameAtConfirmTime = a.filename;
+    const externalRefAtConfirmTime = workspace.externalRef;
+    setConfirm({
+      title: "Delete asset?",
+      message: [
+        `"${a.label}" will be removed from the gallery and from disk.`,
+        "This can't be undone.",
+      ],
+      confirmLabel: "Delete",
+      destructive: true,
+      onConfirm: async () => {
+        setConfirm(null);
+        await performAssetDelete(id, filenameAtConfirmTime, externalRefAtConfirmTime);
+      },
+    });
+  }
 
-    const rel = relPathForAsset(folderName, workspace.externalRef, a);
+  async function performAssetDelete(
+    id: string,
+    filename: string,
+    externalRef: string,
+  ) {
+    if (!workspace) return;
+    const rel = relPathForAsset(folderName, externalRef, {
+      id,
+      filename,
+    } as Asset);
     try {
       if (await exists(rel, { baseDir: BaseDirectory.Document })) {
         await remove(rel, { baseDir: BaseDirectory.Document });
@@ -467,9 +692,10 @@ function App() {
     if (!a) return;
     const active = workspace.tabs.find((t) => t.id === workspace.activeTabId);
     if (!active) return;
+    const wantsVideo = active.kind === "extract" || active.kind === "trim";
     if (
       (active.kind === "generate" && a.kind === "image") ||
-      (active.kind === "extract" && a.kind === "video")
+      (wantsVideo && a.kind === "video")
     ) {
       patchTab(active.id, { inputAssetId: assetId });
     }
@@ -477,28 +703,41 @@ function App() {
 
   function pickIncompatibleAsset(assetId: string, kind: AssetKind) {
     if (!workspace) return;
+    // Default behavior — open a "generate" tab for image inputs and an
+    // "extract" tab for video inputs. Trim is opt-in via the + dropdown.
     const tabKind: "generate" | "extract" =
       kind === "image" ? "generate" : "extract";
     openNewTab(tabKind, assetId);
   }
 
   function openNewTab(
-    kind: "generate" | "extract",
+    kind: "generate" | "extract" | "trim",
     seedInputAssetId: string | null = null,
   ) {
     if (!workspace) return;
     const id = newTabId();
+    const wantsVideoSeed = kind === "extract" || kind === "trim";
     const seedAsset = seedInputAssetId
       ? findAsset(workspace, seedInputAssetId)
-      : kind === "generate"
-        ? workspace.assets.find((a) => a.kind === "image" && a.role === "source")
-        : workspace.assets.find((a) => a.kind === "video");
+      : wantsVideoSeed
+        ? workspace.assets.find((a) => a.kind === "video")
+        : workspace.assets.find((a) => a.kind === "image" && a.role === "source");
     const inputAssetId = seedAsset?.id ?? null;
 
-    const tab: PersistedTab =
-      kind === "generate"
-        ? { id, kind: "generate", inputAssetId, prompt: DEFAULT_PROMPT }
-        : { id, kind: "extract", inputAssetId, scrubSeconds: null };
+    let tab: PersistedTab;
+    if (kind === "generate") {
+      tab = { id, kind: "generate", inputAssetId, prompt: DEFAULT_PROMPT };
+    } else if (kind === "extract") {
+      tab = { id, kind: "extract", inputAssetId, scrubSeconds: null };
+    } else {
+      tab = {
+        id,
+        kind: "trim",
+        inputAssetId,
+        trimStart: null,
+        trimEnd: null,
+      };
+    }
     setWorkspace({
       ...workspace,
       tabs: [...workspace.tabs, tab],
@@ -506,14 +745,29 @@ function App() {
     });
   }
 
-  async function closeTab(id: string) {
+  function closeTab(id: string) {
     if (!workspace) return;
     if (unsavedTabIds.has(id)) {
-      const ok = window.confirm(
-        "This tab has an unsaved preview. Close anyway?\nThe preview can be regenerated.",
-      );
-      if (!ok) return;
+      setConfirm({
+        title: "Close tab with unsaved preview?",
+        message: [
+          "This tab has an unsaved generation preview.",
+          "The preview will be discarded — you can regenerate it.",
+        ],
+        confirmLabel: "Close tab",
+        destructive: true,
+        onConfirm: () => {
+          setConfirm(null);
+          void performCloseTab(id);
+        },
+      });
+      return;
     }
+    void performCloseTab(id);
+  }
+
+  async function performCloseTab(id: string) {
+    if (!workspace) return;
     const nextTabs = workspace.tabs.filter((t) => t.id !== id);
     let nextActive = workspace.activeTabId;
     if (nextActive === id) {
@@ -566,6 +820,11 @@ function App() {
   }
 
   function tabTitle(tab: PersistedTab): string {
+    // Contractor-set label always wins. Derived titles below are
+    // fallbacks for when nothing has been customised.
+    if (tab.userLabel?.trim()) {
+      return shorten(tab.userLabel.trim(), 32);
+    }
     if (tab.kind === "generate") {
       const firstLine = (tab.prompt ?? "").trim().split("\n")[0] ?? "";
       return shorten(firstLine, 28) || "New generate";
@@ -573,10 +832,19 @@ function App() {
     const source = tab.inputAssetId
       ? findAsset(workspace!, tab.inputAssetId)
       : null;
-    const s = tab.scrubSeconds ?? 0;
-    return source
-      ? `Extract @ ${s.toFixed(1)}s from ${shorten(source.label, 18)}`
-      : "New extract";
+    if (tab.kind === "extract") {
+      const s = tab.scrubSeconds ?? 0;
+      return source
+        ? `Extract @ ${s.toFixed(1)}s from ${shorten(source.label, 18)}`
+        : "New extract";
+    }
+    // trim
+    const a = tab.trimStart;
+    const b = tab.trimEnd;
+    if (source && a !== null && b !== null) {
+      return `Trim ${a.toFixed(1)}–${b.toFixed(1)}s of ${shorten(source.label, 16)}`;
+    }
+    return source ? `Trim of ${shorten(source.label, 22)}` : "New trim";
   }
 
   // ─── Render ───────────────────────────────────────────────────────
@@ -598,7 +866,10 @@ function App() {
   }
 
   const activeTab = workspace.tabs.find((t) => t.id === workspace.activeTabId);
-  const activeKind: AssetKind = activeTab?.kind === "extract" ? "video" : "image";
+  const activeKind: AssetKind =
+    activeTab?.kind === "extract" || activeTab?.kind === "trim"
+      ? "video"
+      : "image";
   const activeInputThumb =
     activeTab?.inputAssetId
       ? thumbnailUrls[activeTab.inputAssetId] ?? null
@@ -765,6 +1036,25 @@ function App() {
             />
           )}
 
+          {activeTab?.kind === "trim" && (
+            <TrimClipTab
+              folderName={folderName}
+              externalRef={workspace.externalRef}
+              inputVideo={
+                activeTab.inputAssetId
+                  ? findAsset(workspace, activeTab.inputAssetId)
+                  : null
+              }
+              inputVideoUrl={activeInputThumb}
+              trimStart={activeTab.trimStart}
+              trimEnd={activeTab.trimEnd}
+              onTrimChange={(start, end) =>
+                patchTab(activeTab.id, { trimStart: start, trimEnd: end })
+              }
+              onSave={handleAssetSave}
+            />
+          )}
+
           {!activeTab && (
             <div className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-950 p-12 text-center text-sm text-neutral-500">
               No tab open — click <strong>+</strong> in the tab strip to start.
@@ -784,6 +1074,35 @@ function App() {
           onSave={(next) => {
             saveSettings(next);
             setSettings(next);
+          }}
+        />
+      )}
+
+      {newWorkspaceOpen && (
+        <NewWorkspaceModal
+          onSubmit={createWorkspaceFromModal}
+          onClose={() => setNewWorkspaceOpen(false)}
+        />
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title={confirm.title}
+          message={confirm.message}
+          confirmLabel={confirm.confirmLabel}
+          cancelLabel={confirm.cancelLabel}
+          destructive={confirm.destructive}
+          onConfirm={confirm.onConfirm}
+          onClose={() => {
+            const c = confirm;
+            setConfirm(null);
+            if (c?.onCancel) {
+              try {
+                void c.onCancel();
+              } catch (e) {
+                console.error("[confirm] onCancel threw", e);
+              }
+            }
           }}
         />
       )}

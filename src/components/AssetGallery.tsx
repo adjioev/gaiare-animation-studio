@@ -176,8 +176,10 @@ function AssetCard({
         className="flex min-w-0 flex-1 items-center gap-3 text-left"
         title={
           isCompatible
-            ? `Use ${asset.label} as input`
-            : `Switch to ${asset.kind === "image" ? "Generate clip" : "Extract frame"} tab`
+            ? `Use "${asset.label}" as input for the current tab`
+            : asset.kind === "image"
+              ? `"${asset.label}" is an image — current tab needs a video.\nClick to open a new Generate Clip tab with this image as the start frame.`
+              : `"${asset.label}" is a video — current tab needs an image.\nClick to open a new Extract Frame tab on this video.`
         }
       >
         <div className="h-12 w-16 shrink-0 overflow-hidden rounded bg-neutral-900">

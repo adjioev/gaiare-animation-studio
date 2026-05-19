@@ -52,12 +52,19 @@ export type Asset = {
   createdAt: number;
 };
 
+/** Optional per-tab override for the strip label. Without it the title
+ *  is derived from the tab's content (prompt first line, scrub time,
+ *  trim range) — fine for the current 3 tab kinds, but those
+ *  derivations stop being meaningful for future kinds that are
+ *  distinguished by a non-textual selection (e.g. narration voice). A
+ *  contractor-set `userLabel` always wins. */
 export type PersistedTab =
   | {
       id: string;
       kind: "generate";
       inputAssetId: string | null;
       prompt: string;
+      userLabel?: string;
     }
   | {
       id: string;
@@ -67,6 +74,17 @@ export type PersistedTab =
        *  legitimate value (extracting the opening frame) so we can't
        *  use it as a sentinel. */
       scrubSeconds: number | null;
+      userLabel?: string;
+    }
+  | {
+      id: string;
+      kind: "trim";
+      inputAssetId: string | null;
+      /** Trim range expressed as seconds from clip start. `null` = not
+       *  yet seeded; on first mount we seed to [0, duration]. */
+      trimStart: number | null;
+      trimEnd: number | null;
+      userLabel?: string;
     };
 
 export type Workspace = {
@@ -95,12 +113,16 @@ export function relPathForAsset(
   return `${qdir(folderName, externalRef)}/${asset.filename}`;
 }
 
+/** Asset filename hints. Kept narrow on purpose — `stitched` and `audio`
+ *  used to live here as forward-looking placeholders, but the schema
+ *  drifted ahead of the UI and confused readers. Add a hint here only
+ *  when the corresponding tab kind / AssetKind lands. */
 export function generateAssetFilename(args: {
   id: string;
   kind: AssetKind;
-  hint: "source" | "clip" | "frame" | "stitched" | "audio";
+  hint: "source" | "clip" | "frame";
 }): string {
-  const ext = args.kind === "image" ? "jpg" : args.kind === "video" ? "mp4" : "mp3";
+  const ext = args.kind === "image" ? "jpg" : "mp4";
   return `${args.hint}-${args.id}.${ext}`;
 }
 
