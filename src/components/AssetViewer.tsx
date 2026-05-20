@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui";
 import { ImageLightbox } from "./ImageLightbox";
-import type { Asset, PersistedTab, Workspace } from "../lib/workspace";
+import { isLockedAsset, type Asset, type PersistedTab, type Workspace } from "../lib/workspace";
 
 type ActiveTabKind = PersistedTab["kind"] | null;
 
@@ -75,7 +75,7 @@ export function AssetViewer({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, lightboxSrc]);
 
-  const isProtected = asset.role === "source";
+  const isProtected = isLockedAsset(asset);
   const naturalTabKind: ActiveTabKind =
     asset.kind === "image" ? "generate" : "extract";
   const newTabLabel =
@@ -281,9 +281,9 @@ export function AssetViewer({
 
         {isProtected && (
           <p className="mb-4 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-xs text-amber-200">
-            Source image — the workspace anchor. It can't be deleted
-            (delete it via "New workspace" instead, which starts fresh
-            from a different source URL).
+            {asset.role === "source"
+              ? `Source image — the workspace anchor. It can't be deleted (start a new workspace for a different source).`
+              : `Canonical image from Rails (enhanced) — locked, can't be deleted. It re-downloads if its file goes missing.`}
           </p>
         )}
 

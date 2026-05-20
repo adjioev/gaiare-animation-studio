@@ -68,6 +68,7 @@ GS-12 (Reference-image edit via Gemini) — STANDALONE, no deps
 
 - [GS-12: Studio — reference-image sign-fix via Gemini (crop-edit-composite)](./GS-12-studio-reference-image-edit-gemini.md) — 1–1.5 day · **standalone**
 - [GS-13: Studio — auto-fetch sign references from Rails](./GS-13-studio-auto-sign-refs-from-rails.md) — 1 day · blocked on GS-2/4/5
+- [GS-14: Enhanced image variants in the gallery (locked)](./GS-14-enhanced-image-variants-in-gallery.md) — ~1 day · needs GS-2 + GS-5 (both done)
 
 ## Conventions
 

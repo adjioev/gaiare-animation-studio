@@ -62,12 +62,23 @@ export type Asset = {
    *  (single-image edit), `"gemini"` = Gemini multi-image (sign fix with
    *  reference signs). Absent on non-transform / legacy assets. */
   engine?: "flux" | "gemini";
-  /** Special-cases. `source` = the original question image, protected
-   *  from deletion (the workspace re-fetches it from `sourceUrl` on
-   *  load if missing). */
-  role?: "source";
+  /** Canonical, Rails-sourced images — protected ("locked") from
+   *  deletion. `source` = the original exam image (the default anchor);
+   *  `enhanced` / `enhanced_safe` = the super-res variants. Any set role
+   *  means locked; `source` keeps its special anchor status. */
+  role?: "source" | "enhanced" | "enhanced_safe";
+  /** Remote URL a locked variant was fetched from, so it can be
+   *  re-downloaded if its file goes missing on load. (The `source` asset
+   *  uses `workspace.sourceUrl` instead.) */
+  remoteUrl?: string;
   createdAt: number;
 };
+
+/** A locked asset can't be deleted from the gallery and is re-fetched if
+ *  its file goes missing. Any non-empty `role` marks an asset locked. */
+export function isLockedAsset(asset: Asset): boolean {
+  return asset.role != null;
+}
 
 /** Optional per-tab override for the strip label. Without it the title
  *  is derived from the tab's content (prompt first line, scrub time,
@@ -219,7 +230,7 @@ export function relPathForAsset(
 export function generateAssetFilename(args: {
   id: string;
   kind: AssetKind;
-  hint: "source" | "clip" | "frame" | "stitched";
+  hint: "source" | "clip" | "frame" | "stitched" | "enhanced";
   ext?: string;
 }): string {
   const ext = args.ext ?? (args.kind === "image" ? "jpg" : "mp4");

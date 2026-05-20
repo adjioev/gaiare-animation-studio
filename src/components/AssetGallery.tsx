@@ -6,7 +6,7 @@
 
 import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
-import type { Asset, AssetKind } from "../lib/workspace";
+import { isLockedAsset, type Asset, type AssetKind } from "../lib/workspace";
 import { DRAG_PAYLOAD_MIME, encodeDragPayload } from "../lib/drag";
 
 export function AssetGallery({
@@ -384,9 +384,13 @@ function AssetCard({
         >
           👁
         </button>
-        {asset.role === "source" ? (
+        {isLockedAsset(asset) ? (
           <span
-            title="Source image (protected)"
+            title={
+              asset.role === "source"
+                ? "Source image (protected)"
+                : "Canonical image from Rails (locked)"
+            }
             className="flex h-6 w-6 items-center justify-center rounded text-[10px] text-neutral-600"
           >
             🔒

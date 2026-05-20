@@ -14,6 +14,14 @@ export type StudioQuestion = {
   country_code: string | null;
   text: string | null;
   image_url: string | null;
+  /** Candidate URLs for the image variants (Hetzner path convention).
+   *  Keys present only when derivable; each may still 404 (enhance
+   *  pipeline didn't run for this question) — fetch and skip on failure. */
+  images?: {
+    original?: string;
+    enhanced?: string;
+    enhanced_safe?: string;
+  };
   cognitive_type: string;
   topic: string | null;
   subtopic: string | null;

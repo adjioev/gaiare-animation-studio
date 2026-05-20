@@ -13,6 +13,7 @@ import {
 import {
   findAsset,
   generateAssetFilename,
+  isLockedAsset,
   listWorkspaces,
   loadWorkspace,
   makeEmptyWorkspace,
@@ -546,12 +547,35 @@ function App() {
     }
     await ensureWorkdir(folderName, externalRef);
     ws = await ensureSourceAsset(ws);
+    if (loadResult) {
+      await refetchMissingLocked(ws, loadResult.missingAssetIds);
+    }
     ws = ensureAtLeastOneTab(ws);
 
     await adoptLock(ws.externalRef);
 
     setWorkspace(ws);
     await refreshThumbnails(ws);
+  }
+
+  // Re-download locked variants (enhanced / enhanced-safe) whose files
+  // went missing on disk, using each asset's `remoteUrl`. Mirrors the
+  // source asset's recovery, generalised to all locked assets.
+  async function refetchMissingLocked(ws: Workspace, missingIds: string[]) {
+    for (const id of missingIds) {
+      const a = findAsset(ws, id);
+      if (!a?.remoteUrl) continue;
+      try {
+        await downloadInto({
+          folderName,
+          externalRef: ws.externalRef,
+          filename: a.filename,
+          url: a.remoteUrl,
+        });
+      } catch {
+        // Still unreachable — the missing-asset warning stands.
+      }
+    }
   }
 
   function newWorkspace() {
@@ -561,27 +585,99 @@ function App() {
   async function createWorkspaceFromModal(args: {
     externalRef: string;
     sourceUrl: string;
+    enhancedUrl?: string;
+    enhancedSafeUrl?: string;
   }) {
     clearWarnings();
-    // Don't clobber prior work — if this question already has a
-    // workspace on disk, switch to it instead of recreating empty.
+    // Unified open: load the existing workspace (preserving prior work)
+    // or create a fresh one, then idempotently ensure the source + the
+    // enhanced variants are present. Re-opening a question therefore acts
+    // as a "refresh" — missing locked images are pulled in without
+    // clobbering anything (they're canonical, not user-generated).
     const existing = await loadWorkspace(folderName, args.externalRef);
-    if (existing) {
-      await switchWorkspace(args.externalRef);
-      return;
+    let ws = existing
+      ? existing.workspace
+      : makeEmptyWorkspace({
+          externalRef: args.externalRef,
+          sourceUrl: args.sourceUrl,
+        });
+    // Backfill a missing source URL from the question — repairs an
+    // existing workspace that was created before the source was known
+    // (e.g. manual entry with no URL), so re-opening it from the browser
+    // fixes the source instead of leaving it blank forever.
+    if (!ws.sourceUrl && args.sourceUrl) {
+      ws = { ...ws, sourceUrl: args.sourceUrl };
     }
-    let ws = makeEmptyWorkspace({
-      externalRef: args.externalRef,
-      sourceUrl: args.sourceUrl,
-    });
     await ensureWorkdir(folderName, ws.externalRef);
     ws = await ensureSourceAsset(ws);
+    if (existing) {
+      await refetchMissingLocked(ws, existing.missingAssetIds);
+    }
+    // Best-effort: present in the question's `images`, may 404 if the
+    // enhance pipeline didn't run. addRemoteVariant skips if already there.
+    ws = await addRemoteVariant(ws, args.enhancedUrl, "enhanced", "Enhanced");
+    ws = await addRemoteVariant(
+      ws,
+      args.enhancedSafeUrl,
+      "enhanced_safe",
+      "Enhanced (safe)",
+    );
     ws = ensureAtLeastOneTab(ws);
 
     await adoptLock(ws.externalRef);
 
     setWorkspace(ws);
     await refreshThumbnails(ws);
+
+    if (existing && existing.missingAssetIds.length > 0) {
+      pushWarning(
+        `missing-${args.externalRef}`,
+        `${existing.missingAssetIds.length} asset file(s) missing on disk for q${args.externalRef}.`,
+      );
+    }
+  }
+
+  // Download a locked image variant (enhanced / enhanced-safe) and add it
+  // as a protected asset. 404 / unreachable → the variant doesn't exist,
+  // skip silently. The `remoteUrl` lets it re-download if the file is lost.
+  async function addRemoteVariant(
+    ws: Workspace,
+    url: string | undefined,
+    role: "enhanced" | "enhanced_safe",
+    label: string,
+  ): Promise<Workspace> {
+    if (!url) return ws;
+    // Idempotent: a variant of this role already present → refresh no-op.
+    if (ws.assets.some((a) => a.role === role)) return ws;
+    try {
+      const id = newAssetId();
+      const extMatch = url.split("?")[0]!.match(/\.(png|jpe?g|webp)$/i);
+      const ext = extMatch ? extMatch[1]!.toLowerCase().replace("jpeg", "jpg") : "jpg";
+      const filename = generateAssetFilename({
+        id,
+        kind: "image",
+        hint: "enhanced",
+        ext,
+      });
+      await downloadInto({
+        folderName,
+        externalRef: ws.externalRef,
+        filename,
+        url,
+      });
+      const asset: Asset = {
+        id,
+        kind: "image",
+        filename,
+        label,
+        role,
+        remoteUrl: url,
+        createdAt: Date.now(),
+      };
+      return upsertAsset(ws, asset);
+    } catch {
+      return ws;
+    }
   }
 
   async function ensureSourceAsset(ws: Workspace): Promise<Workspace> {
@@ -672,11 +768,11 @@ function App() {
     if (!workspace) return;
     const a = findAsset(workspace, id);
     if (!a) return;
-    if (a.role === "source") {
+    if (isLockedAsset(a)) {
       setConfirm({
-        title: "Source image is protected",
+        title: "Image is protected",
         message: [
-          "The source image is the workspace anchor — it can't be deleted.",
+          "This is a canonical image from Rails (source / enhanced) — it's locked and can't be deleted.",
           "If you need a different source, create a new workspace instead.",
         ],
         confirmLabel: "OK",

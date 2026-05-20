@@ -9,6 +9,7 @@ import {
   listQuestions,
   type QuestionsPage,
   type StudioCountry,
+  type StudioQuestion,
 } from "../lib/rails";
 import { Button, Field, errorMessage, inputCls } from "./ui";
 
@@ -31,7 +32,12 @@ export function OpenQuestionModal({
 }: {
   railsServer: { url: string } | null;
   defaultCountry?: string;
-  onOpen: (args: { externalRef: string; sourceUrl: string }) => Promise<void>;
+  onOpen: (args: {
+    externalRef: string;
+    sourceUrl: string;
+    enhancedUrl?: string;
+    enhancedSafeUrl?: string;
+  }) => Promise<void>;
   onClose: () => void;
   onOpenSettings: () => void;
 }) {
@@ -111,7 +117,12 @@ function BrowseQuestions({
   defaultCountry?: string;
   busy: boolean;
   setBusy: (b: boolean) => void;
-  onOpen: (args: { externalRef: string; sourceUrl: string }) => Promise<void>;
+  onOpen: (args: {
+    externalRef: string;
+    sourceUrl: string;
+    enhancedUrl?: string;
+    enhancedSafeUrl?: string;
+  }) => Promise<void>;
   onClose: () => void;
   onOpenSettings: () => void;
 }) {
@@ -182,10 +193,15 @@ function BrowseQuestions({
     };
   }, [serverUrl, country, cognitiveType, query, sort, page]);
 
-  async function open(externalRef: string, sourceUrl: string | null) {
+  async function open(q: StudioQuestion) {
     setBusy(true);
     try {
-      await onOpen({ externalRef, sourceUrl: sourceUrl ?? "" });
+      await onOpen({
+        externalRef: q.external_ref,
+        sourceUrl: q.image_url ?? "",
+        enhancedUrl: q.images?.enhanced,
+        enhancedSafeUrl: q.images?.enhanced_safe,
+      });
       onClose();
     } catch (e) {
       setError(errorMessage(e));
@@ -280,7 +296,7 @@ function BrowseQuestions({
             {result.data.map((q) => (
               <li key={q.id}>
                 <button
-                  onClick={() => open(q.external_ref, q.image_url)}
+                  onClick={() => open(q)}
                   disabled={busy}
                   className="flex w-full items-center gap-3 p-3 text-left hover:bg-neutral-900 disabled:opacity-50"
                 >
@@ -349,7 +365,12 @@ function ManualEntry({
 }: {
   busy: boolean;
   setBusy: (b: boolean) => void;
-  onOpen: (args: { externalRef: string; sourceUrl: string }) => Promise<void>;
+  onOpen: (args: {
+    externalRef: string;
+    sourceUrl: string;
+    enhancedUrl?: string;
+    enhancedSafeUrl?: string;
+  }) => Promise<void>;
   onClose: () => void;
   onOpenSettings: () => void;
 }) {
