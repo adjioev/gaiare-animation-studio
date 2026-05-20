@@ -20,7 +20,6 @@ import {
 import { probeDurationSeconds } from "../../lib/ffmpeg";
 import {
   Button,
-  Field,
   StatusPill,
   Textarea,
   errorMessage,
@@ -44,6 +43,7 @@ export function GenerateClipTab({
   prompt,
   onPromptChange,
   onSave,
+  onOpenLibrary,
 }: {
   folderName: string;
   externalRef: string;
@@ -53,6 +53,9 @@ export function GenerateClipTab({
   prompt: string;
   onPromptChange: (next: string) => void;
   onSave: (asset: Asset) => Promise<void>;
+  /** Open the prompt library — "save" stores the current prompt,
+   *  "browse" picks a saved one. */
+  onOpenLibrary: (mode: "browse" | "save") => void;
 }) {
   const [status, setStatus] = useState<Status>({ state: "idle" });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -234,14 +237,34 @@ export function GenerateClipTab({
             </div>
           </div>
 
-          <Field label="Prompt">
-            <Textarea
-              value={prompt}
-              onChange={onPromptChange}
-              rows={10}
-              placeholder="Open the AI panel on the right and describe what you want (e.g. &quot;red sedan turns left, van stays put&quot;), then click Apply to drop the generated prompt here. Or type directly if you know the structure."
-            />
-          </Field>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wide text-neutral-500">
+              Prompt
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onOpenLibrary("browse")}
+                className="rounded px-2 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+                title="Browse saved prompts"
+              >
+                📚 Library
+              </button>
+              <button
+                onClick={() => onOpenLibrary("save")}
+                disabled={!prompt.trim()}
+                className="rounded px-2 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Save this prompt to the library"
+              >
+                💾 Save
+              </button>
+            </div>
+          </div>
+          <Textarea
+            value={prompt}
+            onChange={onPromptChange}
+            rows={10}
+            placeholder="Open the AI panel on the right and describe what you want (e.g. &quot;red sedan turns left, van stays put&quot;), then click Apply to drop the generated prompt here. Or type directly if you know the structure."
+          />
 
           <div className="mt-4 flex items-center gap-3">
             <Button onClick={generate} disabled={status.state === "running"}>

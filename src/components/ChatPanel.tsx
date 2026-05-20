@@ -43,6 +43,8 @@ export function ChatPanel({
   activeTab,
   onAppendMessage,
   onApplyPromptToActiveTab,
+  onSavePromptToLibrary,
+  canSaveToLibrary,
   onResetChat,
   collapsed,
   onToggleCollapsed,
@@ -60,6 +62,12 @@ export function ChatPanel({
    *  prompt. Parent locates the currently-active generate tab and
    *  patches its `prompt` field. */
   onApplyPromptToActiveTab: (prompt: string) => void;
+  /** Save a proposed prompt to the library — parent opens the save
+   *  modal pre-loaded with this body + the active tab's kind. */
+  onSavePromptToLibrary: (body: string) => void;
+  /** True when the active tab has a prompt domain (generate / transform)
+   *  so the "Save to library" affordance makes sense. */
+  canSaveToLibrary: boolean;
   /** Wipe the per-workspace chat history. Parent routes this through
    *  the shared ConfirmModal so the user has to acknowledge — once
    *  cleared the messages aren't recoverable. */
@@ -354,7 +362,12 @@ export function ChatPanel({
             key={m.id}
             message={m}
             onApply={onApplyPromptToActiveTab}
-            canApply={activeTab?.kind === "generate"}
+            canApply={
+              activeTab?.kind === "generate" ||
+              activeTab?.kind === "transform"
+            }
+            onSaveToLibrary={onSavePromptToLibrary}
+            canSaveToLibrary={canSaveToLibrary}
           />
         ))}
         {sending && (
@@ -400,10 +413,14 @@ function Bubble({
   message,
   onApply,
   canApply,
+  onSaveToLibrary,
+  canSaveToLibrary,
 }: {
   message: ChatMessage;
   onApply: (prompt: string) => void;
   canApply: boolean;
+  onSaveToLibrary: (body: string) => void;
+  canSaveToLibrary: boolean;
 }) {
   const isUser = message.role === "user";
   // Single-pass parse — same regex drives both the prompt extraction
@@ -440,13 +457,22 @@ function Bubble({
             >
               Copy
             </button>
+            {canSaveToLibrary && (
+              <button
+                onClick={() => onSaveToLibrary(parsed.prompt!)}
+                title="Save this prompt to the library for reuse"
+                className="rounded border border-neutral-800 px-2 py-1 text-[10px] text-neutral-400 hover:border-neutral-600 hover:text-neutral-200"
+              >
+                💾 Save
+              </button>
+            )}
             <button
               onClick={() => onApply(parsed.prompt!)}
               disabled={!canApply}
               title={
                 canApply
-                  ? "Replace the active Generate tab's prompt"
-                  : "Open a Generate tab to apply"
+                  ? "Replace the active tab's prompt"
+                  : "Open a Generate or Edit-image tab to apply"
               }
               className="rounded bg-indigo-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-600"
             >

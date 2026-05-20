@@ -47,6 +47,15 @@ import { ConfirmModal } from "./components/ConfirmModal";
 import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
 import { ChatPanel } from "./components/ChatPanel";
 import { AssetViewer } from "./components/AssetViewer";
+import { PromptLibraryModal } from "./components/PromptLibraryModal";
+import {
+  addPrompt,
+  deletePrompt,
+  loadPromptLibrary,
+  newPromptId,
+  type PromptKind,
+  type SavedPrompt,
+} from "./lib/prompt-library";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
 
@@ -69,6 +78,16 @@ function App() {
    *  Esc / backdrop dismiss + keyboard navigation can be wired
    *  centrally without leaking modal state into the gallery. */
   const [viewerAssetId, setViewerAssetId] = useState<string | null>(null);
+
+  /** Global reusable prompt library, loaded once at app start from
+   *  `<folder>/prompt-library.json`. `lastUsedAt` is bumped in-memory
+   *  on Apply (for sort recency) but only persisted on save/replace. */
+  const [promptLibrary, setPromptLibrary] = useState<SavedPrompt[]>([]);
+  const [libraryModal, setLibraryModal] = useState<{
+    mode: "browse" | "save";
+    kind: PromptKind;
+    draftBody: string;
+  } | null>(null);
   /** When set, renders a ConfirmModal. The `onConfirm` callback is the
    *  destructive action; setting back to `null` dismisses the modal. */
   const [confirm, setConfirm] = useState<{
@@ -217,7 +236,10 @@ function App() {
         await adoptLock(ws.externalRef);
 
         setWorkspace(ws);
-            await refreshThumbnails(ws);
+        await refreshThumbnails(ws);
+        // Prompt library is global (folder-scoped, not per-workspace)
+        // so it loads once here and survives workspace switches.
+        setPromptLibrary(await loadPromptLibrary(folderName));
       } catch (e) {
         setGlobalError(errorMessage(e));
       } finally {
@@ -908,8 +930,88 @@ function App() {
   function applyPromptToActiveTab(prompt: string) {
     if (!workspace?.activeTabId) return;
     const active = workspace.tabs.find((t) => t.id === workspace.activeTabId);
-    if (!active || active.kind !== "generate") return;
+    // Both prompt-bearing tab kinds accept an applied prompt.
+    if (!active || (active.kind !== "generate" && active.kind !== "transform"))
+      return;
     patchTab(active.id, { prompt });
+  }
+
+  // ─── Prompt library ──────────────────────────────────────────────
+
+  /** Tab kind → library domain. Only generate (wan) + transform (flux)
+   *  have prompts; other tabs return null and don't surface library
+   *  affordances. */
+  function libraryKindForActiveTab(): PromptKind | null {
+    const active = workspace?.tabs.find((t) => t.id === workspace.activeTabId);
+    if (active?.kind === "generate") return "wan";
+    if (active?.kind === "transform") return "flux";
+    return null;
+  }
+
+  function openLibrary(mode: "browse" | "save") {
+    const kind = libraryKindForActiveTab();
+    if (!kind || !workspace?.activeTabId) return;
+    const active = workspace.tabs.find((t) => t.id === workspace.activeTabId);
+    const draftBody =
+      active && (active.kind === "generate" || active.kind === "transform")
+        ? active.prompt
+        : "";
+    setLibraryModal({ mode, kind, draftBody });
+  }
+
+  /** Save the chat-proposed prompt directly (from ChatPanel's card)
+   *  rather than the tab's current textarea — opens the save modal
+   *  pre-loaded with that body. */
+  function openLibrarySaveWithBody(body: string) {
+    const kind = libraryKindForActiveTab();
+    if (!kind) return;
+    setLibraryModal({ mode: "save", kind, draftBody: body });
+  }
+
+  async function handleSaveNewPrompt(name: string) {
+    if (!libraryModal) return;
+    const prompt: SavedPrompt = {
+      id: newPromptId(),
+      name,
+      body: libraryModal.draftBody,
+      kind: libraryModal.kind,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+    };
+    setPromptLibrary(await addPrompt(folderName, prompt));
+  }
+
+  async function handleUpdatePrompt(id: string, name: string) {
+    if (!libraryModal) return;
+    const existing = promptLibrary.find((p) => p.id === id);
+    if (!existing) return;
+    const updated: SavedPrompt = {
+      ...existing,
+      name,
+      body: libraryModal.draftBody,
+      lastUsedAt: Date.now(),
+    };
+    setPromptLibrary(await addPrompt(folderName, updated));
+  }
+
+  function handleApplyLibraryPrompt(prompt: SavedPrompt) {
+    applyPromptToActiveTab(prompt.body);
+    // Bump recency in memory only — persisting per-Apply would be the
+    // noisiest cloud-sync trigger (architect note). Caveat: a
+    // subsequent save/delete replaces state with the file contents
+    // (which lack this bump), so within-session apply-recency can be
+    // reset by an intervening save. That's a cosmetic sort effect, not
+    // data loss — acceptable for a 3-user tool.
+    setPromptLibrary((lib) =>
+      lib.map((p) =>
+        p.id === prompt.id ? { ...p, lastUsedAt: Date.now() } : p,
+      ),
+    );
+    setLibraryModal(null);
+  }
+
+  async function handleDeleteLibraryPrompt(id: string) {
+    setPromptLibrary(await deletePrompt(folderName, id));
   }
 
   function requestResetChat() {
@@ -1160,6 +1262,7 @@ function App() {
               prompt={activeTab.prompt}
               onPromptChange={(p) => patchTab(activeTab.id, { prompt: p })}
               onSave={handleAssetSave}
+              onOpenLibrary={openLibrary}
             />
           )}
 
@@ -1235,6 +1338,7 @@ function App() {
               prompt={activeTab.prompt}
               onPromptChange={(p) => patchTab(activeTab.id, { prompt: p })}
               onSave={handleAssetSave}
+              onOpenLibrary={openLibrary}
             />
           )}
 
@@ -1256,6 +1360,8 @@ function App() {
         activeTab={activeTab}
         onAppendMessage={appendChatMessage}
         onApplyPromptToActiveTab={applyPromptToActiveTab}
+        onSavePromptToLibrary={openLibrarySaveWithBody}
+        canSaveToLibrary={libraryKindForActiveTab() !== null}
         onResetChat={requestResetChat}
         collapsed={settings.chatPanelCollapsed ?? false}
         onToggleCollapsed={toggleChatPanel}
@@ -1324,6 +1430,20 @@ function App() {
             />
           );
         })()}
+
+      {libraryModal && (
+        <PromptLibraryModal
+          initialMode={libraryModal.mode}
+          kind={libraryModal.kind}
+          prompts={promptLibrary}
+          draftBody={libraryModal.draftBody}
+          onApply={handleApplyLibraryPrompt}
+          onSaveNew={handleSaveNewPrompt}
+          onUpdateExisting={handleUpdatePrompt}
+          onDelete={handleDeleteLibraryPrompt}
+          onClose={() => setLibraryModal(null)}
+        />
+      )}
     </main>
   );
 }

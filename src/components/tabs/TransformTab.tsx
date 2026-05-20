@@ -26,7 +26,6 @@ import {
 } from "../../lib/workdir";
 import {
   Button,
-  Field,
   StatusPill,
   Textarea,
   errorMessage,
@@ -51,6 +50,7 @@ export function TransformTab({
   prompt,
   onPromptChange,
   onSave,
+  onOpenLibrary,
 }: {
   folderName: string;
   externalRef: string;
@@ -64,6 +64,8 @@ export function TransformTab({
   prompt: string;
   onPromptChange: (next: string) => void;
   onSave: (asset: Asset) => Promise<void>;
+  /** Open the prompt library (flux edit prompts). */
+  onOpenLibrary: (mode: "browse" | "save") => void;
 }) {
   const [status, setStatus] = useState<Status>({ state: "idle" });
   const [latestUrl, setLatestUrl] = useState<string | null>(null);
@@ -215,14 +217,34 @@ export function TransformTab({
             </div>
           </div>
 
-          <Field label="Edit instruction">
-            <Textarea
-              value={prompt}
-              onChange={onPromptChange}
-              rows={6}
-              placeholder='e.g. "remove the yellow arrows on the road" — keep instructions direct, single-edit. The AI panel on the right can help if you describe what bothers you in the image.'
-            />
-          </Field>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wide text-neutral-500">
+              Edit instruction
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => onOpenLibrary("browse")}
+                className="rounded px-2 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+                title="Browse saved edit prompts"
+              >
+                📚 Library
+              </button>
+              <button
+                onClick={() => onOpenLibrary("save")}
+                disabled={!prompt.trim()}
+                className="rounded px-2 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Save this edit prompt to the library"
+              >
+                💾 Save
+              </button>
+            </div>
+          </div>
+          <Textarea
+            value={prompt}
+            onChange={onPromptChange}
+            rows={6}
+            placeholder='e.g. "remove the yellow arrows on the road" — keep instructions direct, single-edit. The AI panel on the right can help if you describe what bothers you in the image.'
+          />
 
           <div className="mt-4 flex items-center gap-3">
             <Button
