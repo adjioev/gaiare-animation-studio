@@ -14,8 +14,10 @@ explicit. Estimated effort assumes the contractor knows both stacks.
 | 2 | Publish generated clips to Rails | GS-6 → GS-8 | ~2 days |
 | 3 | Country + external_ref composite key | GS-9 | 0.5 day |
 | 4 | Studio AI uses Rails MCP for context | GS-10 → GS-11 | ~3 days |
+| 5 | Sign-fix via reference-image edit (Gemini) | GS-12 → GS-13 | ~2–2.5 days |
 
-Total: **~9-10 days** of focused work for the full integration.
+Total: **~9-10 days** for the full integration, **+2 days** for sign-fix
+(GS-12 is standalone and can land any time).
 
 ## Dependency graph
 
@@ -32,6 +34,9 @@ GS-6 (Rails publish endpoints) ── GS-7 (Hetzner presigner) ── GS-8 (Stud
 GS-9 (Country namespace) — independent, can land any time after Phase 1
 
 GS-10 (MCP bridge) ── GS-11 (skill prompt update)
+
+GS-12 (Reference-image edit via Gemini) — STANDALONE, no deps
+  └─ GS-13 (Auto-fetch sign refs from Rails) ── needs GS-2 + GS-4 + GS-5
 ```
 
 ## Tickets
@@ -58,6 +63,11 @@ GS-10 (MCP bridge) ── GS-11 (skill prompt update)
 
 - [GS-10: Studio — MCP bridge + function-calling loop](./GS-10-studio-mcp-bridge.md) — 2 days
 - [GS-11: Studio — skill prompt update for MCP tools](./GS-11-studio-skill-prompt-mcp-update.md) — 0.5 day
+
+### Phase 5 — Sign-fix via reference-image edit
+
+- [GS-12: Studio — reference-image sign-fix via Gemini (crop-edit-composite)](./GS-12-studio-reference-image-edit-gemini.md) — 1–1.5 day · **standalone**
+- [GS-13: Studio — auto-fetch sign references from Rails](./GS-13-studio-auto-sign-refs-from-rails.md) — 1 day · blocked on GS-2/4/5
 
 ## Conventions
 
