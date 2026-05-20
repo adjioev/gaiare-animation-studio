@@ -44,7 +44,7 @@ import { StitchTab } from "./components/tabs/StitchTab";
 import { TransformTab } from "./components/tabs/TransformTab";
 import { SettingsModal } from "./components/SettingsModal";
 import { ConfirmModal } from "./components/ConfirmModal";
-import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
+import { OpenQuestionModal } from "./components/OpenQuestionModal";
 import { ChatPanel } from "./components/ChatPanel";
 import { AssetViewer } from "./components/AssetViewer";
 import { PromptLibraryModal } from "./components/PromptLibraryModal";
@@ -58,6 +58,7 @@ import {
 } from "./lib/prompt-library";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
+import { isRailsConnected } from "./lib/rails";
 
 const DEFAULT_EXTERNAL_REF = "14";
 const DEFAULT_SOURCE_URL =
@@ -72,6 +73,33 @@ const DEFAULT_PROMPT = "";
 function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Reconcile the persisted Rails connection against the keychain on
+  // startup: Settings (localStorage) can claim "connected" while the
+  // keychain has no token (different machine, OS eviction). If so, clear
+  // the stale flag so the UI doesn't advertise a dead connection.
+  useEffect(() => {
+    const server = settings.railsServer;
+    if (!server) return;
+    let cancelled = false;
+    void isRailsConnected(server.url)
+      .then((ok) => {
+        if (cancelled || ok) return;
+        setSettings((prev) => {
+          const next = { ...prev, railsServer: undefined };
+          saveSettings(next);
+          return next;
+        });
+      })
+      .catch(() => {
+        /* keychain probe failed — leave state as-is */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Mount-once reconciliation against the initial persisted settings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
   /** ID of the asset shown in the inspect viewer, or null if the
    *  viewer is closed. Kept on App rather than per-card local state so
@@ -535,6 +563,13 @@ function App() {
     sourceUrl: string;
   }) {
     clearWarnings();
+    // Don't clobber prior work — if this question already has a
+    // workspace on disk, switch to it instead of recreating empty.
+    const existing = await loadWorkspace(folderName, args.externalRef);
+    if (existing) {
+      await switchWorkspace(args.externalRef);
+      return;
+    }
     let ws = makeEmptyWorkspace({
       externalRef: args.externalRef,
       sourceUrl: args.sourceUrl,
@@ -1381,13 +1416,29 @@ function App() {
             saveSettings(next);
             setSettings(next);
           }}
+          onRailsConnected={(server) => {
+            const next = { ...settings, railsServer: server };
+            saveSettings(next);
+            setSettings(next);
+          }}
+          onRailsDisconnected={() => {
+            const next = { ...settings, railsServer: undefined };
+            saveSettings(next);
+            setSettings(next);
+          }}
         />
       )}
 
       {newWorkspaceOpen && (
-        <NewWorkspaceModal
-          onSubmit={createWorkspaceFromModal}
+        <OpenQuestionModal
+          railsServer={settings.railsServer ?? null}
+          defaultCountry={settings.defaultCountry}
+          onOpen={createWorkspaceFromModal}
           onClose={() => setNewWorkspaceOpen(false)}
+          onOpenSettings={() => {
+            setNewWorkspaceOpen(false);
+            setSettingsOpen(true);
+          }}
         />
       )}
 

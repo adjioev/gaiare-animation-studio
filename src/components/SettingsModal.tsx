@@ -10,20 +10,74 @@ import {
   type Settings,
 } from "../lib/settings";
 import { Button, Field, errorMessage, inputCls } from "./ui";
+import { DEFAULT_RAILS_URL, connectRails, disconnectRails } from "../lib/rails";
 
 export function SettingsModal({
   initial,
   onSave,
   onClose,
+  onRailsConnected,
+  onRailsDisconnected,
 }: {
   initial: Settings;
   onSave: (next: Settings) => Promise<void> | void;
   onClose: () => void;
+  onRailsConnected: (server: { url: string }) => void;
+  onRailsDisconnected: () => void;
 }) {
   const [folderName, setFolderName] = useState(initial.workspaceFolderName);
   const [contractorId, setContractorId] = useState(initial.contractorId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Rails connection (paste-token). The token goes straight to the Rust
+  // keychain via connectRails — it's never kept in component state beyond
+  // the input, never persisted to Settings/localStorage.
+  const [connectedUrl, setConnectedUrl] = useState<string | null>(
+    initial.railsServer?.url ?? null,
+  );
+  const [serverUrl, setServerUrl] = useState(
+    initial.railsServer?.url ?? DEFAULT_RAILS_URL,
+  );
+  const [tokenInput, setTokenInput] = useState("");
+  const [connecting, setConnecting] = useState(false);
+  const [connError, setConnError] = useState<string | null>(null);
+
+  async function connect() {
+    const url = serverUrl.trim().replace(/\/+$/, "");
+    const token = tokenInput.trim();
+    if (!url || !token) {
+      setConnError("Server URL and token are required.");
+      return;
+    }
+    setConnecting(true);
+    setConnError(null);
+    try {
+      await connectRails(url, token);
+      setConnectedUrl(url);
+      setTokenInput("");
+      onRailsConnected({ url });
+    } catch (e) {
+      setConnError(errorMessage(e));
+    } finally {
+      setConnecting(false);
+    }
+  }
+
+  async function disconnect() {
+    if (!connectedUrl) return;
+    setConnecting(true);
+    setConnError(null);
+    try {
+      await disconnectRails(connectedUrl);
+      setConnectedUrl(null);
+      onRailsDisconnected();
+    } catch (e) {
+      setConnError(errorMessage(e));
+    } finally {
+      setConnecting(false);
+    }
+  }
 
   // Esc to close
   useEffect(() => {
@@ -45,6 +99,7 @@ export function SettingsModal({
     setBusy(true);
     try {
       await onSave({
+        ...initial,
         workspaceFolderName: cleaned,
         contractorId: trimmedContractor || undefined,
       });
@@ -121,6 +176,64 @@ export function SettingsModal({
             teammate opening the same one sees a warning. Purely advisory —
             no authentication.
           </p>
+
+          <div className="border-t border-neutral-800 pt-4">
+            <p className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+              Rails connection
+            </p>
+            {connectedUrl ? (
+              <div className="space-y-2">
+                <p className="text-sm text-neutral-200">
+                  Connected to{" "}
+                  <code className="text-neutral-300">{connectedUrl}</code>
+                </p>
+                <Button
+                  variant="secondary"
+                  onClick={disconnect}
+                  disabled={connecting}
+                >
+                  {connecting ? "…" : "Disconnect"}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Field label="Server URL">
+                  <input
+                    type="url"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.currentTarget.value)}
+                    placeholder={DEFAULT_RAILS_URL}
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="API token" hint="from Rails /admin/api_tokens">
+                  <input
+                    type="password"
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.currentTarget.value)}
+                    placeholder="paste token"
+                    className={inputCls}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void connect();
+                      }
+                    }}
+                  />
+                </Field>
+                <Button onClick={connect} disabled={connecting || !tokenInput.trim()}>
+                  {connecting ? "Connecting…" : "Connect"}
+                </Button>
+              </div>
+            )}
+            {connError && (
+              <p className="mt-2 text-xs text-rose-300">⚠ {connError}</p>
+            )}
+            <p className="mt-2 text-[11px] text-neutral-500">
+              The token is stored in your macOS Keychain — never on disk in
+              plain text. Generate one in Rails admin → API tokens.
+            </p>
+          </div>
         </section>
 
         <footer className="mt-6 flex items-center justify-end gap-3">

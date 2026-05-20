@@ -31,6 +31,14 @@ export type Settings = {
    *  Defaults to 384 (the original `w-96`). Persisted on resize so
    *  the contractor's preferred working width survives restarts. */
   chatPanelWidth?: number;
+  /** Rails connection (non-secret). The bearer token is NEVER stored
+   *  here — it lives in the OS keychain (see `src/lib/rails.ts`). This
+   *  only records which server we're connected to so the UI can show it
+   *  and the proxy commands know where to call. */
+  railsServer?: { url: string };
+  /** Default country code (e.g. "GE") pre-selected in the
+   *  browse-questions filter. */
+  defaultCountry?: string;
 };
 
 export const DEFAULT_SETTINGS: Settings = {

@@ -41,4 +41,8 @@ dotenvy = "0.15"
 # production-build .env fallback paths — `dotenvy::dotenv()` alone
 # can't find `.env` from a packaged `.app` whose cwd is `/`.
 dirs = "5"
+# OS keychain for the Rails bearer token — the secret lives in the
+# macOS Keychain, never in the JS bundle or localStorage. macOS-only
+# Phase 1, so the apple-native backend is enough.
+keyring = { version = "3", features = ["apple-native"] }
 

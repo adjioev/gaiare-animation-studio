@@ -6,6 +6,7 @@
 
 mod gemini;
 mod llm;
+mod rails;
 mod replicate;
 mod safe_path;
 
@@ -15,6 +16,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gemini::gemini_generate_image;
 use llm::fireworks_chat;
+use rails::{
+    rails_connect, rails_disconnect, rails_get_question, rails_is_connected,
+    rails_list_countries, rails_list_questions,
+};
 use replicate::{
     replicate_cancel_prediction, replicate_create_prediction, replicate_get_prediction,
     replicate_upload_file,
@@ -256,6 +261,12 @@ pub fn run() {
             assert_safe_document_path_cmd,
             fireworks_chat,
             gemini_generate_image,
+            rails_connect,
+            rails_disconnect,
+            rails_is_connected,
+            rails_list_questions,
+            rails_get_question,
+            rails_list_countries,
             arm_quit,
             force_quit,
             cancel_quit,
