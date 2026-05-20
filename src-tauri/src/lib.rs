@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gemini::gemini_generate_image;
+use gemini::{gemini_generate_image, rasterize_svg};
 use llm::fireworks_chat;
 use rails::{
     rails_connect, rails_disconnect, rails_get_question, rails_is_connected,
@@ -261,6 +261,7 @@ pub fn run() {
             assert_safe_document_path_cmd,
             fireworks_chat,
             gemini_generate_image,
+            rasterize_svg,
             rails_connect,
             rails_disconnect,
             rails_is_connected,

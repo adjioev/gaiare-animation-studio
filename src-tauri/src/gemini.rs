@@ -39,6 +39,51 @@ pub struct GeneratedImage {
     pub data: String,
 }
 
+/// Rasterise SVG markup to a crisp PNG at `size` px on the long edge.
+/// resvg renders the vector at the target resolution (no upscaling blur),
+/// unlike the browser-canvas path which first decodes the SVG at its
+/// intrinsic size and then scales the bitmap up. JS fetches the bytes
+/// (keeping the network call out of Rust) and passes the markup here.
+#[tauri::command]
+pub fn rasterize_svg(svg: String, size: Option<u32>) -> Result<GeneratedImage, GeminiError> {
+    use base64::Engine;
+
+    let target = size.unwrap_or(1024).clamp(16, 4096);
+
+    let mut opt = resvg::usvg::Options::default();
+    // Sign SVGs sometimes carry live <text> (e.g. numbers) — load system
+    // fonts so it renders instead of dropping out.
+    opt.fontdb_mut().load_system_fonts();
+
+    let tree = resvg::usvg::Tree::from_str(&svg, &opt)
+        .map_err(|e| GeminiError { message: format!("invalid SVG: {e}") })?;
+
+    let svg_size = tree.size();
+    let max_edge = svg_size.width().max(svg_size.height());
+    if max_edge <= 0.0 {
+        return Err(GeminiError { message: "SVG has zero size".into() });
+    }
+    let scale = target as f32 / max_edge;
+    let pw = ((svg_size.width() * scale).round() as u32).max(1);
+    let ph = ((svg_size.height() * scale).round() as u32).max(1);
+
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(pw, ph)
+        .ok_or_else(|| GeminiError { message: "failed to allocate pixmap".into() })?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    let png = pixmap
+        .encode_png()
+        .map_err(|e| GeminiError { message: format!("png encode failed: {e}") })?;
+
+    Ok(GeneratedImage {
+        mime_type: "image/png".into(),
+        data: base64::engine::general_purpose::STANDARD.encode(png),
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GeminiError {
     pub message: String,

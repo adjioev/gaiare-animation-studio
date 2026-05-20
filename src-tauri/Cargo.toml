@@ -45,4 +45,10 @@ dirs = "5"
 # macOS Keychain, never in the JS bundle or localStorage. macOS-only
 # Phase 1, so the apple-native backend is enough.
 keyring = { version = "3", features = ["apple-native"] }
+# Crisp SVG → PNG for sign references: resvg renders the vector at the
+# target size (no upscaling blur like the browser canvas path). Bundles
+# usvg (parser) + tiny-skia (rasteriser). `base64` encodes the PNG for
+# the JS bridge.
+resvg = "0.45"
+base64 = "0.22"
 

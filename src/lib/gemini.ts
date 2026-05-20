@@ -45,11 +45,13 @@ export async function runGeminiSignFix(args: {
   return { mimeType: res.mime_type, dataB64: res.data };
 }
 
-const CROP_FIX_INSTRUCTION = `The FIRST image is a small crop from a driving-theory photo containing ONE road sign whose face was degraded/hallucinated by upscaling — its current symbol is WRONG and must not be trusted. The SECOND image is the CORRECT sign.
+const CROP_FIX_INSTRUCTION = `Two images are provided.
+- Image 1: a photo crop that contains one road sign.
+- Image 2: the correct version of that sign.
 
-Completely REPLACE the face of the sign in the first image with the symbol from the reference — overwrite it entirely. Do NOT blend, merge or keep any of the existing (degraded) markings; the reference is the only source of truth for the symbol, colours and shape.
+Your only task: paint the sign from image 2 onto the sign face in image 1. Reproduce image 2's exact symbol, shape and colours, fitted to the existing sign's position, size, angle, perspective and lighting in image 1.
 
-Only adapt the reference to fit the photo: match the sign's position, size, rotation, perspective and lighting so it sits naturally on the existing post. Keep the surrounding background (sky, road, poles, foliage) unchanged. Do not add or remove anything else. Output the corrected crop with the same framing.`;
+Output image 1 with that single change applied. Every other pixel — background, road, rocks, sky, posts, other signs, framing — stays exactly as it is in image 1.`;
 
 /** Region-scoped sign fix: a single sign's crop + its correct reference.
  *  The caller crops the region from the source and composites the result
@@ -101,40 +103,20 @@ export async function fetchReferenceInline(
   const isSvg =
     contentType === "image/svg+xml" || url.toLowerCase().endsWith(".svg");
   if (isSvg) {
-    return rasterizeSvgToPng(bytes);
+    // Render the vector to a crisp PNG in Rust (resvg) — far sharper than
+    // the browser-canvas path, which decodes the SVG at its small intrinsic
+    // size and then upscales the bitmap (blurry).
+    const svgText = new TextDecoder().decode(bytes);
+    const out = await invoke<{ mime_type: string; data: string }>(
+      "rasterize_svg",
+      { svg: svgText },
+    );
+    return { mime_type: out.mime_type, data: out.data };
   }
   return {
     mime_type: contentType || guessImageMime(url),
     data: bytesToBase64(bytes),
   };
-}
-
-async function rasterizeSvgToPng(svgBytes: Uint8Array): Promise<InlineImage> {
-  const svgText = new TextDecoder().decode(svgBytes);
-  const blob = new Blob([svgText], { type: "image/svg+xml" });
-  const objectUrl = URL.createObjectURL(blob);
-  try {
-    const img = await loadImage(objectUrl);
-    // Signs are simple vectors — rasterise at a high max edge so the model
-    // sees a crisp symbol (a soft reference produces a soft repaint),
-    // preserving aspect.
-    const maxEdge = 1024;
-    const w = img.naturalWidth || maxEdge;
-    const h = img.naturalHeight || maxEdge;
-    const scale = maxEdge / Math.max(w, h);
-    const cw = Math.max(1, Math.round(w * scale));
-    const ch = Math.max(1, Math.round(h * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = cw;
-    canvas.height = ch;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("canvas 2d context unavailable");
-    ctx.drawImage(img, 0, 0, cw, ch);
-    const dataUrl = canvas.toDataURL("image/png");
-    return { mime_type: "image/png", data: dataUrl.split(",")[1] ?? "" };
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
