@@ -80,7 +80,9 @@
       "allow": [
         { "url": "https://replicate.delivery/*" },
         { "url": "https://*.replicate.delivery/*" },
-        { "url": "https://hel1.your-objectstorage.com/*" }
+        { "url": "https://hel1.your-objectstorage.com/*" },
+        { "url": "https://upload.wikimedia.org/*" },
+        { "url": "https://*.wikimedia.org/*" }
       ]
     },
 

@@ -4,6 +4,7 @@
 // Most renderer logic stays in TypeScript; Rust hosts the Replicate
 // proxy commands so the API token never enters the JS bundle.
 
+mod gemini;
 mod llm;
 mod replicate;
 mod safe_path;
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use gemini::gemini_generate_image;
 use llm::fireworks_chat;
 use replicate::{
     replicate_cancel_prediction, replicate_create_prediction, replicate_get_prediction,
@@ -253,6 +255,7 @@ pub fn run() {
             replicate_upload_file,
             assert_safe_document_path_cmd,
             fireworks_chat,
+            gemini_generate_image,
             arm_quit,
             force_quit,
             cancel_quit,

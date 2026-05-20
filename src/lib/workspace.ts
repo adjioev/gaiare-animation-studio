@@ -58,6 +58,10 @@ export type Asset = {
   durationSec?: number;
   /** Provenance — added 2026. Old assets backfill to `"uploaded"`. */
   originKind?: AssetOriginKind;
+  /** Which image model produced a transform. `"flux"` = Flux Kontext
+   *  (single-image edit), `"gemini"` = Gemini multi-image (sign fix with
+   *  reference signs). Absent on non-transform / legacy assets. */
+  engine?: "flux" | "gemini";
   /** Special-cases. `source` = the original question image, protected
    *  from deletion (the workspace re-fetches it from `sourceUrl` on
    *  load if missing). */

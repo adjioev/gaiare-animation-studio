@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui";
+import { ImageLightbox } from "./ImageLightbox";
 import type { Asset, PersistedTab, Workspace } from "../lib/workspace";
 
 type ActiveTabKind = PersistedTab["kind"] | null;
@@ -48,6 +49,10 @@ export function AssetViewer({
   onOpenInNewTab: () => void;
 }) {
   const useBtnRef = useRef<HTMLButtonElement | null>(null);
+  // Full-screen zoom for inspecting details (images only). Declared here
+  // so the Esc handler can skip closing the viewer while the lightbox
+  // (which has its own Esc handler) is the top layer.
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   // Esc to close, focus the primary action so keyboard users can
   // commit immediately. Matches ConfirmModal pattern.
@@ -59,13 +64,16 @@ export function AssetViewer({
     useBtnRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Lightbox is on top and owns Esc — both listeners are on
+        // window, so stopPropagation can't shield us; skip explicitly.
+        if (lightboxSrc) return;
         e.stopPropagation();
         onClose();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, lightboxSrc]);
 
   const isProtected = asset.role === "source";
   const naturalTabKind: ActiveTabKind =
@@ -124,13 +132,15 @@ export function AssetViewer({
       ? thumbnailUrls[firstImageParent.id] ?? null
       : null;
   const [compareMode, setCompareMode] = useState(false);
-  // Reset compare when switching to a different asset in the same
-  // viewer instance.
+  // Reset compare + lightbox when switching to a different asset in the
+  // same viewer instance.
   useEffect(() => {
     setCompareMode(false);
+    setLightboxSrc(null);
   }, [asset.id]);
 
   return (
+   <>
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/80 pt-12"
       onClick={onClose}
@@ -195,7 +205,9 @@ export function AssetViewer({
                 <img
                   src={compareThumbnailUrl}
                   alt={firstImageParent?.label ?? "original"}
-                  className="mx-auto max-h-[60vh] w-auto"
+                  onClick={() => setLightboxSrc(compareThumbnailUrl)}
+                  title="Click to view full screen"
+                  className="mx-auto max-h-[60vh] w-auto cursor-zoom-in"
                 />
                 <figcaption className="bg-neutral-900 p-1 text-center text-[10px] uppercase tracking-wider text-neutral-500">
                   Original · {firstImageParent?.label ?? "?"}
@@ -205,7 +217,9 @@ export function AssetViewer({
                 <img
                   src={thumbnailUrl}
                   alt={asset.label}
-                  className="mx-auto max-h-[60vh] w-auto"
+                  onClick={() => setLightboxSrc(thumbnailUrl)}
+                  title="Click to view full screen"
+                  className="mx-auto max-h-[60vh] w-auto cursor-zoom-in"
                 />
                 <figcaption className="bg-indigo-950/40 p-1 text-center text-[10px] uppercase tracking-wider text-indigo-300">
                   This asset
@@ -216,7 +230,9 @@ export function AssetViewer({
             <img
               src={thumbnailUrl}
               alt={asset.label}
-              className="mx-auto max-h-[60vh] w-auto"
+              onClick={() => setLightboxSrc(thumbnailUrl)}
+              title="Click to view full screen"
+              className="mx-auto max-h-[60vh] w-auto cursor-zoom-in"
             />
           ) : (
             <video
@@ -305,5 +321,13 @@ export function AssetViewer({
         </footer>
       </div>
     </div>
+    {lightboxSrc && (
+      <ImageLightbox
+        src={lightboxSrc}
+        alt={asset.label}
+        onClose={() => setLightboxSrc(null)}
+      />
+    )}
+   </>
   );
 }
