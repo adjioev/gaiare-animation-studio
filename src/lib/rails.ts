@@ -26,9 +26,21 @@ export type StudioQuestion = {
   topic: string | null;
   subtopic: string | null;
   updated_at: string | null;
+  /** Correct signs for the question — only on the detail (show) response,
+   *  resolved from the question's visual context. */
+  signs?: StudioSign[];
 };
 
 export type StudioCountry = { code: string; name: string };
+
+/** A correct sign for a question (detail/show only), for the sign-fix
+ *  flow. `svg_url` is the canonical reference to repaint from. */
+export type StudioSign = {
+  code: string;
+  name: string | null;
+  svg_url: string;
+  image_url: string | null;
+};
 
 export type QuestionFilters = {
   country_code?: string;

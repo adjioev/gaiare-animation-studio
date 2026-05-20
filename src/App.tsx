@@ -59,7 +59,7 @@ import {
 } from "./lib/prompt-library";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
-import { isRailsConnected } from "./lib/rails";
+import { getQuestion, isRailsConnected } from "./lib/rails";
 
 const DEFAULT_EXTERNAL_REF = "14";
 const DEFAULT_SOURCE_URL =
@@ -587,6 +587,7 @@ function App() {
     sourceUrl: string;
     enhancedUrl?: string;
     enhancedSafeUrl?: string;
+    questionId?: number;
   }) {
     clearWarnings();
     // Unified open: load the existing workspace (preserving prior work)
@@ -622,6 +623,23 @@ function App() {
       "enhanced_safe",
       "Enhanced (safe)",
     );
+    // Pull the question's correct signs from Rails (detail endpoint) so
+    // sign-fix can auto-load references. Best-effort: skipped if not
+    // connected or the question has no resolvable signs.
+    if (args.questionId != null && settings.railsServer) {
+      try {
+        const detail = await getQuestion(
+          settings.railsServer.url,
+          String(args.questionId),
+        );
+        const signs = (detail.signs ?? [])
+          .filter((s) => s.svg_url)
+          .map((s) => ({ code: s.code, name: s.name, svgUrl: s.svg_url }));
+        ws = { ...ws, questionSigns: signs };
+      } catch {
+        // best-effort — leave questionSigns as-is
+      }
+    }
     ws = ensureAtLeastOneTab(ws);
 
     await adoptLock(ws.externalRef);
@@ -762,6 +780,19 @@ function App() {
       console.error("[workspace] immediate save after asset save failed", e);
     }
     await refreshThumbnails(next);
+  }
+
+  async function handleAssetRename(id: string, label: string) {
+    if (!workspace) return;
+    const a = findAsset(workspace, id);
+    if (!a) return;
+    const next = upsertAsset(workspace, { ...a, label });
+    setWorkspace(next);
+    try {
+      await saveWorkspace(folderName, next);
+    } catch (e) {
+      console.error("[workspace] rename save failed", e);
+    }
   }
 
   function handleAssetDelete(id: string) {
@@ -1259,6 +1290,7 @@ function App() {
         selectedAssetId={singleInputAssetId}
         onSelect={selectAssetForActiveTab}
         onRequestDelete={handleAssetDelete}
+        onRename={handleAssetRename}
         activeKind={activeKind}
         onPickIncompatible={pickIncompatibleAsset}
         onPreview={setViewerAssetId}
@@ -1470,6 +1502,7 @@ function App() {
               onPromptChange={(p) => patchTab(activeTab.id, { prompt: p })}
               onSave={handleAssetSave}
               onOpenLibrary={openLibrary}
+              questionSigns={workspace.questionSigns ?? []}
             />
           )}
 

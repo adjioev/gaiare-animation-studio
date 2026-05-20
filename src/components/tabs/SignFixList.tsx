@@ -176,11 +176,17 @@ export function SignFixList({
   activeId,
   onChange,
   onSelect,
+  loadableCount = 0,
+  onLoadFromQuestion,
 }: {
   fixes: SignFix[];
   activeId: string | null;
   onChange: (next: SignFix[]) => void;
   onSelect: (id: string) => void;
+  /** Number of signs Rails knows for this question (enables the
+   *  "Load signs from question" shortcut). */
+  loadableCount?: number;
+  onLoadFromQuestion?: () => void;
 }) {
   function update(id: string, patch: Partial<SignFix>) {
     onChange(fixes.map((f) => (f.id === id ? { ...f, ...patch } : f)));
@@ -209,12 +215,23 @@ export function SignFixList({
           ))}
         </ul>
       )}
-      <button
-        onClick={add}
-        className="rounded-lg border border-dashed border-neutral-700 px-3 py-1.5 text-[11px] text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
-      >
-        + Add sign fix
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={add}
+          className="rounded-lg border border-dashed border-neutral-700 px-3 py-1.5 text-[11px] text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+        >
+          + Add sign fix
+        </button>
+        {loadableCount > 0 && onLoadFromQuestion && (
+          <button
+            onClick={onLoadFromQuestion}
+            className="rounded-lg border border-indigo-700 px-3 py-1.5 text-[11px] text-indigo-300 hover:border-indigo-500 hover:text-indigo-200"
+            title="Add a fix row per sign Rails knows for this question (reference auto-filled; mark each region)"
+          >
+            ⤵ Load {loadableCount} sign{loadableCount > 1 ? "s" : ""} from question
+          </button>
+        )}
+      </div>
     </div>
   );
 }

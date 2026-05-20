@@ -193,6 +193,11 @@ export type Workspace = {
    *  `kind: "video"` by `toggleAssetTag` because Stitch is the only
    *  consumer — image badges would never produce a visible action. */
   taggedAssetIds?: string[];
+  /** Correct signs for the question, fetched from Rails on open. The
+   *  sign-fix "Load signs from question" turns each into a fix row
+   *  (reference = the sign's SVG). Empty/absent when not connected or the
+   *  question has no resolvable signs. */
+  questionSigns?: { code: string; name: string | null; svgUrl: string }[];
   updatedAt: number;
 };
 

@@ -37,6 +37,7 @@ export function OpenQuestionModal({
     sourceUrl: string;
     enhancedUrl?: string;
     enhancedSafeUrl?: string;
+    questionId?: number;
   }) => Promise<void>;
   onClose: () => void;
   onOpenSettings: () => void;
@@ -122,6 +123,7 @@ function BrowseQuestions({
     sourceUrl: string;
     enhancedUrl?: string;
     enhancedSafeUrl?: string;
+    questionId?: number;
   }) => Promise<void>;
   onClose: () => void;
   onOpenSettings: () => void;
@@ -201,6 +203,7 @@ function BrowseQuestions({
         sourceUrl: q.image_url ?? "",
         enhancedUrl: q.images?.enhanced,
         enhancedSafeUrl: q.images?.enhanced_safe,
+        questionId: q.id,
       });
       onClose();
     } catch (e) {
@@ -370,6 +373,7 @@ function ManualEntry({
     sourceUrl: string;
     enhancedUrl?: string;
     enhancedSafeUrl?: string;
+    questionId?: number;
   }) => Promise<void>;
   onClose: () => void;
   onOpenSettings: () => void;

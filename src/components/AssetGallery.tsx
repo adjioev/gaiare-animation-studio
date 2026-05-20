@@ -4,7 +4,7 @@
 // active tab to use the asset. Each card has a delete button (×) that
 // removes the file from disk and the entry from the workspace.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { isLockedAsset, type Asset, type AssetKind } from "../lib/workspace";
 import { DRAG_PAYLOAD_MIME, encodeDragPayload } from "../lib/drag";
@@ -14,6 +14,7 @@ export function AssetGallery({
   selectedAssetId,
   onSelect,
   onRequestDelete,
+  onRename,
   activeKind,
   onPickIncompatible,
   onPreview,
@@ -28,6 +29,9 @@ export function AssetGallery({
   /** Called when the user clicks × on an asset card. Caller is
    *  responsible for confirmation, file removal, and workspace update. */
   onRequestDelete: (id: string) => void;
+  /** Rename an asset's label (double-click the name). Persists via the
+   *  caller. Allowed on locked assets too — rename ≠ delete. */
+  onRename: (id: string, label: string) => void;
   /** Which kind the active tab consumes — used for highlight + dimming. */
   activeKind: AssetKind;
   /** Called when the user clicks an asset whose kind doesn't match the
@@ -113,6 +117,7 @@ export function AssetGallery({
           selectedAssetId={selectedAssetId}
           onSelect={onSelect}
           onRequestDelete={onRequestDelete}
+          onRename={onRename}
           onPickIncompatible={(id) => onPickIncompatible(id, "image")}
           onPreview={onPreview}
           activeKind={activeKind}
@@ -128,6 +133,7 @@ export function AssetGallery({
           selectedAssetId={selectedAssetId}
           onSelect={onSelect}
           onRequestDelete={onRequestDelete}
+          onRename={onRename}
           onPickIncompatible={(id) => onPickIncompatible(id, "video")}
           onPreview={onPreview}
           activeKind={activeKind}
@@ -148,6 +154,7 @@ function Section({
   selectedAssetId,
   onSelect,
   onRequestDelete,
+  onRename,
   onPickIncompatible,
   onPreview,
   activeKind,
@@ -162,6 +169,7 @@ function Section({
   selectedAssetId: string | null;
   onSelect: (id: string) => void;
   onRequestDelete: (id: string) => void;
+  onRename: (id: string, label: string) => void;
   onPickIncompatible: (id: string) => void;
   onPreview: (id: string) => void;
   activeKind: AssetKind;
@@ -212,6 +220,7 @@ function Section({
                   }
                   onDelete={() => onRequestDelete(asset.id)}
                   onPreview={() => onPreview(asset.id)}
+                  onRename={(label) => onRename(asset.id, label)}
                 />
               </li>
             );
@@ -232,6 +241,7 @@ function AssetCard({
   onClick,
   onDelete,
   onPreview,
+  onRename,
 }: {
   asset: Asset;
   isSelected: boolean;
@@ -244,7 +254,17 @@ function AssetCard({
   onClick: () => void;
   onDelete: () => void;
   onPreview: () => void;
+  onRename: (label: string) => void;
 }) {
+  // Inline label rename — double-click the name to edit.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(asset.label);
+
+  function commitRename() {
+    const next = draft.trim();
+    if (next && next !== asset.label) onRename(next);
+    setEditing(false);
+  }
   // Only video assets are draggable today — the Stitch tab is the only
   // drop target and it consumes videos. Source images stay non-draggable
   // (they're a single-instance anchor, dragging them adds no value and
@@ -356,7 +376,38 @@ function AssetCard({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm text-neutral-200">{asset.label}</p>
+          {editing ? (
+            <input
+              value={draft}
+              autoFocus
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setDraft(e.currentTarget.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitRename();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setEditing(false);
+                }
+              }}
+              className="w-full rounded border border-neutral-700 bg-neutral-900 px-1 py-0.5 text-sm text-neutral-100 outline-none focus:border-neutral-500"
+            />
+          ) : (
+            <p
+              className="truncate text-sm text-neutral-200"
+              title="Double-click to rename"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setDraft(asset.label);
+                setEditing(true);
+              }}
+            >
+              {asset.label}
+            </p>
+          )}
           <p className="truncate text-[10px] text-neutral-500">
             {asset.kind === "video" && asset.durationSec
               ? `${asset.durationSec.toFixed(1)}s · `

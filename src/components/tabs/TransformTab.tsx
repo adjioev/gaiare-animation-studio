@@ -85,6 +85,7 @@ export function TransformTab({
   onPromptChange,
   onSave,
   onOpenLibrary,
+  questionSigns = [],
 }: {
   folderName: string;
   externalRef: string;
@@ -100,6 +101,9 @@ export function TransformTab({
   onSave: (asset: Asset) => Promise<void>;
   /** Open the prompt library (flux edit prompts). */
   onOpenLibrary: (mode: "browse" | "save") => void;
+  /** Correct signs from Rails — powers "Load signs from question" in the
+   *  sign-fix list (each becomes a fix with its SVG as the reference). */
+  questionSigns?: { code: string; name: string | null; svgUrl: string }[];
 }) {
   const [status, setStatus] = useState<Status>({ state: "idle" });
   const [latestUrl, setLatestUrl] = useState<string | null>(null);
@@ -131,6 +135,23 @@ export function TransformTab({
     setFixes((prev) =>
       prev.map((f) => (f.id === activeFixId ? { ...f, region: rect } : f)),
     );
+  }
+
+  // Append a fix row per Rails sign (reference = its SVG), skipping signs
+  // whose reference is already in the list. Region stays null — the user
+  // marks where each sign is (no bbox from Rails yet).
+  function loadSignsFromQuestion() {
+    setFixes((prev) => {
+      const present = new Set(prev.map((f) => f.referenceUrl));
+      const added = questionSigns
+        .filter((s) => !present.has(s.svgUrl))
+        .map((s) => ({
+          id: crypto.randomUUID(),
+          referenceUrl: s.svgUrl,
+          region: null,
+        }));
+      return [...prev, ...added];
+    });
   }
 
   useEffect(() => {
@@ -523,6 +544,8 @@ export function TransformTab({
               activeId={activeFixId}
               onChange={setFixes}
               onSelect={setActiveFixId}
+              loadableCount={questionSigns.length}
+              onLoadFromQuestion={loadSignsFromQuestion}
             />
 
             {fixes.length > 0 &&
