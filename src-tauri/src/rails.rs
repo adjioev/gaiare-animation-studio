@@ -6,12 +6,47 @@
 //! making requests. Mirrors the replicate.rs / llm.rs threat model: the
 //! secret stays in this process.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
 const KEYCHAIN_SERVICE: &str = "gaiare-animation-studio.rails-token";
+
+/// In-memory token cache, keyed by normalised server URL. Without it every
+/// API request reads the keychain, and an unsigned dev binary re-prompts
+/// for the login password on each read. With it the keychain is read at
+/// most once per server per app session. The token never leaves this
+/// process (same trust boundary as the keychain).
+static TOKEN_CACHE: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn cache_key(server_url: &str) -> String {
+    server_url.trim_end_matches('/').to_string()
+}
+
+fn cached_token(server_url: &str) -> Option<String> {
+    let guard = TOKEN_CACHE.lock().ok()?;
+    guard.as_ref()?.get(&cache_key(server_url)).cloned()
+}
+
+fn cache_token(server_url: &str, token: &str) {
+    if let Ok(mut guard) = TOKEN_CACHE.lock() {
+        guard
+            .get_or_insert_with(HashMap::new)
+            .insert(cache_key(server_url), token.to_string());
+    }
+}
+
+fn uncache_token(server_url: &str) {
+    if let Ok(mut guard) = TOKEN_CACHE.lock() {
+        if let Some(map) = guard.as_mut() {
+            map.remove(&cache_key(server_url));
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RailsError {
@@ -77,9 +112,14 @@ fn validate_server(raw: &str) -> Result<(), RailsError> {
 }
 
 fn token_for(server_url: &str) -> Result<String, RailsError> {
-    keychain_entry(server_url)?
-        .get_password()
-        .map_err(|_| RailsError::new("rails_not_connected", "Not connected to Rails — connect in Settings"))
+    if let Some(token) = cached_token(server_url) {
+        return Ok(token);
+    }
+    let token = keychain_entry(server_url)?.get_password().map_err(|_| {
+        RailsError::new("rails_not_connected", "Not connected to Rails — connect in Settings")
+    })?;
+    cache_token(server_url, &token);
+    Ok(token)
 }
 
 fn endpoint(server_url: &str, path: &str) -> String {
@@ -164,12 +204,16 @@ pub async fn rails_connect(server_url: String, token: String) -> Result<Value, R
     keychain_entry(&server_url)?
         .set_password(&token)
         .map_err(|e| RailsError::new("keychain_error", format!("keychain: {e}")))?;
+    // Seed the in-memory cache so subsequent requests this session don't
+    // re-read the keychain (and re-prompt on unsigned dev builds).
+    cache_token(&server_url, &token);
 
     Ok(body)
 }
 
 #[tauri::command]
 pub fn rails_disconnect(server_url: String) -> Result<(), RailsError> {
+    uncache_token(&server_url);
     match keychain_entry(&server_url)?.delete_credential() {
         Ok(_) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
@@ -179,10 +223,20 @@ pub fn rails_disconnect(server_url: String) -> Result<(), RailsError> {
 
 #[tauri::command]
 pub fn rails_is_connected(server_url: String) -> bool {
-    keychain_entry(&server_url)
+    if cached_token(&server_url).is_some() {
+        return true;
+    }
+    // One keychain read (caches it) — keeps later API calls prompt-free.
+    match keychain_entry(&server_url)
         .ok()
         .and_then(|e| e.get_password().ok())
-        .is_some()
+    {
+        Some(token) => {
+            cache_token(&server_url, &token);
+            true
+        }
+        None => false,
+    }
 }
 
 #[tauri::command]
