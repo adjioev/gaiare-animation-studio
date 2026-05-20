@@ -18,7 +18,7 @@ export function TabStrip({
   activeTabId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
-  onNew: (kind: "generate" | "extract" | "trim" | "stitch") => void;
+  onNew: (kind: "generate" | "extract" | "trim" | "stitch" | "transform") => void;
   tabTitle: (tab: PersistedTab) => string;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -52,7 +52,9 @@ export function TabStrip({
                 ? "✂️"
                 : tab.kind === "trim"
                   ? "🎞️"
-                  : "🔗";
+                  : tab.kind === "stitch"
+                    ? "🔗"
+                    : "🪄";
           return (
             <div
               key={tab.id}
@@ -127,6 +129,14 @@ export function TabStrip({
               }}
             >
               🔗 New Stitch clips
+            </MenuItem>
+            <MenuItem
+              onSelect={() => {
+                setMenuOpen(false);
+                onNew("transform");
+              }}
+            >
+              🪄 New Edit image
             </MenuItem>
           </div>
         )}

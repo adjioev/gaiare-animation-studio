@@ -126,6 +126,17 @@ export async function uploadFileToReplicate(absPath: string): Promise<string> {
  */
 export const WAN_MODEL = "wan-video/wan-2.2-i2v-fast";
 
+/** Black Forest Labs Flux Kontext Pro — image-to-image edits with
+ *  natural-language instructions ("remove the yellow arrows", "change
+ *  the red car to blue"). ~$0.04/edit as of May 2026. The Transform
+ *  tab uses this to clean exam imagery before Wan animates it. */
+export const FLUX_KONTEXT_MODEL = "black-forest-labs/flux-kontext-pro";
+
+/** Rough per-call cost in USD for the cost-meter tooltip. Replicate's
+ *  billing is the source of truth; this is a UI hint. Update if pricing
+ *  shifts. */
+export const FLUX_KONTEXT_COST_USD = 0.04;
+
 const WAN_DEFAULT_PARAMS = {
   num_frames: 81,
   frames_per_second: 16,
@@ -152,6 +163,45 @@ export async function runWan(
   });
   if (final.status !== "succeeded" || !final.output) {
     throw new Error(`Wan generation failed: ${final.error ?? final.status}`);
+  }
+  return final.output as string;
+}
+
+/**
+ * Flux Kontext Pro — single-shot image edit. Input: an image URL and a
+ * natural-language instruction. Output: a single image URL hosted on
+ * Replicate's CDN. We pull it locally via `downloadInto` in the
+ * Transform tab and save as a new image asset.
+ *
+ * `output_format: "png"` — the model only accepts `jpg | png` (webp is
+ * rejected with a 422). PNG is lossless, which avoids JPEG compression
+ * artifacts in the region the edit fills in (e.g. the asphalt patched
+ * over removed arrows).
+ */
+const FLUX_KONTEXT_DEFAULT_PARAMS = {
+  output_format: "png",
+  // Match input aspect by default so the cleaned image lines up
+  // pixel-for-pixel with the original when used as a Wan start frame.
+  aspect_ratio: "match_input_image",
+} as const;
+
+export async function runFluxKontext(
+  input: { input_image: string; prompt: string },
+  opts: { signal?: AbortSignal; onTick?: (p: Prediction<string>) => void } = {},
+): Promise<string> {
+  const started = await invoke<unknown>("replicate_create_prediction", {
+    model: FLUX_KONTEXT_MODEL,
+    input: { ...FLUX_KONTEXT_DEFAULT_PARAMS, ...input },
+  });
+  if (!isValidPrediction(started)) {
+    throw new Error("Replicate returned an unexpected response shape");
+  }
+  const final = await pollPrediction(started as Prediction<string>, {
+    signal: opts.signal,
+    onTick: opts.onTick,
+  });
+  if (final.status !== "succeeded" || !final.output) {
+    throw new Error(`Flux Kontext edit failed: ${final.error ?? final.status}`);
   }
   return final.output as string;
 }

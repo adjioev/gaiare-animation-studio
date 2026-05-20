@@ -9,7 +9,7 @@
 // inspect mode for when you want to see the clip large or check what
 // prompt produced it.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui";
 import type { Asset, PersistedTab, Workspace } from "../lib/workspace";
 
@@ -19,6 +19,7 @@ export function AssetViewer({
   asset,
   thumbnailUrl,
   workspace,
+  thumbnailUrls,
   activeTabKind,
   onClose,
   onUseAsInput,
@@ -29,6 +30,9 @@ export function AssetViewer({
   /** Read-only — used to render parent labels in the genealogy line.
    *  Not passed to the actions (those run via callbacks above). */
   workspace: Workspace;
+  /** Full map so the Compare toggle can resolve the parent's
+   *  thumbnail without another round-trip. */
+  thumbnailUrls: Record<string, string>;
   /** `null` if no tab is open. Used to enable/disable the "use as
    *  input" action and to label what tab kind would be opened by
    *  the secondary action. */
@@ -80,6 +84,7 @@ export function AssetViewer({
     if (!activeTabKind) return false;
     switch (activeTabKind) {
       case "generate":
+      case "transform":
         return asset.kind === "image";
       case "extract":
       case "trim":
@@ -104,6 +109,26 @@ export function AssetViewer({
   const parentLabels = (asset.parentAssetIds ?? [])
     .map((id) => workspace.assets.find((a) => a.id === id)?.label)
     .filter((l): l is string => Boolean(l));
+
+  // First image parent for the Compare toggle — only meaningful for
+  // image assets with an image parent (Transform results pointing at
+  // a source image). Other lineage cases (video → frame, clip → trim)
+  // wouldn't be useful side-by-side at this size.
+  const firstImageParent = (asset.parentAssetIds ?? [])
+    .map((id) => workspace.assets.find((a) => a.id === id))
+    .find(
+      (a): a is Asset => a !== undefined && a.kind === "image",
+    );
+  const compareThumbnailUrl =
+    firstImageParent && asset.kind === "image"
+      ? thumbnailUrls[firstImageParent.id] ?? null
+      : null;
+  const [compareMode, setCompareMode] = useState(false);
+  // Reset compare when switching to a different asset in the same
+  // viewer instance.
+  useEffect(() => {
+    setCompareMode(false);
+  }, [asset.id]);
 
   return (
     <div
@@ -140,11 +165,52 @@ export function AssetViewer({
         </header>
 
         {/* Preview — large rendering of the asset itself. Video uses
-            controls so the contractor can scrub through the clip. */}
+            controls so the contractor can scrub through the clip. In
+            compare mode (image assets only, with an image parent),
+            shows source-vs-result side-by-side so the contractor can
+            verify the edit didn't break something. */}
+        {compareThumbnailUrl && (
+          <div className="mb-2 flex items-center justify-end gap-2">
+            <button
+              onClick={() => setCompareMode((v) => !v)}
+              className={
+                compareMode
+                  ? "rounded-full bg-indigo-600 px-3 py-1 text-[11px] font-medium uppercase tracking-wider text-white hover:bg-indigo-500"
+                  : "rounded-full border border-neutral-800 px-3 py-1 text-[11px] font-medium uppercase tracking-wider text-neutral-300 hover:border-neutral-600 hover:text-white"
+              }
+              title="Show this asset side-by-side with its original (the parent it was derived from)"
+            >
+              {compareMode ? "Single view" : "Compare with original"}
+            </button>
+          </div>
+        )}
         <div className="mb-4 overflow-hidden rounded-lg border border-neutral-800 bg-black">
           {!thumbnailUrl ? (
             <div className="flex h-48 items-center justify-center text-xs text-neutral-600">
               Preview unavailable
+            </div>
+          ) : compareMode && compareThumbnailUrl ? (
+            <div className="grid grid-cols-2 gap-1 bg-neutral-900">
+              <figure className="flex flex-col">
+                <img
+                  src={compareThumbnailUrl}
+                  alt={firstImageParent?.label ?? "original"}
+                  className="mx-auto max-h-[60vh] w-auto"
+                />
+                <figcaption className="bg-neutral-900 p-1 text-center text-[10px] uppercase tracking-wider text-neutral-500">
+                  Original · {firstImageParent?.label ?? "?"}
+                </figcaption>
+              </figure>
+              <figure className="flex flex-col">
+                <img
+                  src={thumbnailUrl}
+                  alt={asset.label}
+                  className="mx-auto max-h-[60vh] w-auto"
+                />
+                <figcaption className="bg-indigo-950/40 p-1 text-center text-[10px] uppercase tracking-wider text-indigo-300">
+                  This asset
+                </figcaption>
+              </figure>
             </div>
           ) : asset.kind === "image" ? (
             <img

@@ -9,7 +9,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import wanSkills from "../skills/wan-i2v.md?raw";
-import type { ChatMessage as PersistedChatMessage } from "./workspace";
+import fluxSkills from "../skills/flux-image-edit.md?raw";
+import type {
+  ChatMessage as PersistedChatMessage,
+  PersistedTab,
+} from "./workspace";
 
 /**
  * Stable 6-char identifier for the loaded skills doc, so each persisted
@@ -30,7 +34,37 @@ function djb2Hash(s: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 6);
 }
 
-export const SKILLS_FINGERPRINT = djb2Hash(wanSkills);
+/**
+ * Skills doc + fingerprint per domain. The chat assistant ships the
+ * system prompt that matches the active tab — Generate / Stitch / no
+ * tab use Wan skills (animation prompts); Transform uses Flux skills
+ * (image edits). The fingerprint persisted on each assistant message
+ * is the hash of WHICHEVER doc was active at that turn, so future
+ * regressions are traceable to the exact skills version.
+ */
+const WAN_SKILLS_FINGERPRINT = djb2Hash(wanSkills);
+const FLUX_SKILLS_FINGERPRINT = djb2Hash(fluxSkills);
+
+export type SkillContext = "wan" | "flux";
+
+/** Maps a tab kind → which skills doc to load. Generate / extract /
+ *  trim / stitch / no-active-tab all stay on Wan because the
+ *  conversational context is animation-driven; only `transform` switches
+ *  to Flux because the user is talking about pixel-level image edits. */
+export function skillContextForTab(
+  kind: PersistedTab["kind"] | undefined,
+): SkillContext {
+  return kind === "transform" ? "flux" : "wan";
+}
+
+export function skillsForContext(ctx: SkillContext): string {
+  return ctx === "flux" ? fluxSkills : wanSkills;
+}
+
+export function fingerprintForContext(ctx: SkillContext): string {
+  return ctx === "flux" ? FLUX_SKILLS_FINGERPRINT : WAN_SKILLS_FINGERPRINT;
+}
+
 
 /** Fireworks-side message — `content` is either a string (text-only)
  *  or an array of parts (OpenAI vision format). We construct multipart
@@ -138,11 +172,17 @@ export async function chat(
      *  latest user message. When provided, the call routes to a
      *  vision-capable model unless `opts.model` overrides. */
     attachImageDataUri?: string;
+    /** Which skills doc to load as the system prompt. Defaults to Wan
+     *  (animation) — caller should override to "flux" when the user
+     *  is in a Transform tab so the assistant knows it's writing
+     *  image-edit prompts, not animation prompts. */
+    skillContext?: SkillContext;
   } = {},
 ): Promise<ChatResponse> {
   const model = opts.model ?? CHAT_MODEL;
+  const context = opts.skillContext ?? "wan";
   const messages: WireMessage[] = [
-    { role: "system", content: wanSkills },
+    { role: "system", content: skillsForContext(context) },
     ...toWireMessages(history, opts.attachImageDataUri ?? null),
   ];
   const res = await invoke<{

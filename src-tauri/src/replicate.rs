@@ -119,7 +119,10 @@ async fn request_json(
 /// Format: `owner/name`. Versioned slugs (`owner/name:hash`) are
 /// allowed but should be the exception — pinning a version freezes
 /// behaviour but blocks bug-fix updates.
-const ALLOWED_MODELS: &[&str] = &["wan-video/wan-2.2-i2v-fast"];
+const ALLOWED_MODELS: &[&str] = &[
+    "wan-video/wan-2.2-i2v-fast",
+    "black-forest-labs/flux-kontext-pro",
+];
 
 /// Start a prediction on any allowlisted Replicate model. The
 /// renderer chooses the model + input parameters; Rust validates the

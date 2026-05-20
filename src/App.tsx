@@ -41,6 +41,7 @@ import { GenerateClipTab } from "./components/tabs/GenerateClipTab";
 import { ExtractFrameTab } from "./components/tabs/ExtractFrameTab";
 import { TrimClipTab } from "./components/tabs/TrimClipTab";
 import { StitchTab } from "./components/tabs/StitchTab";
+import { TransformTab } from "./components/tabs/TransformTab";
 import { SettingsModal } from "./components/SettingsModal";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { NewWorkspaceModal } from "./components/NewWorkspaceModal";
@@ -727,8 +728,9 @@ function App() {
       return;
     }
     const wantsVideo = active.kind === "extract" || active.kind === "trim";
+    const wantsImage = active.kind === "generate" || active.kind === "transform";
     if (
-      (active.kind === "generate" && a.kind === "image") ||
+      (wantsImage && a.kind === "image") ||
       (wantsVideo && a.kind === "video")
     ) {
       patchTab(active.id, { inputAssetId: assetId });
@@ -746,7 +748,7 @@ function App() {
   }
 
   function openNewTab(
-    kind: "generate" | "extract" | "trim" | "stitch",
+    kind: "generate" | "extract" | "trim" | "stitch" | "transform",
     seedInputAssetId: string | null = null,
   ) {
     if (!workspace) return;
@@ -773,7 +775,7 @@ function App() {
         trimStart: null,
         trimEnd: null,
       };
-    } else {
+    } else if (kind === "stitch") {
       // Stitch — seed with the chosen asset if one was provided
       // (e.g. user clicked a video while no tab was active) so the
       // first slot is filled rather than greeting them with an
@@ -783,6 +785,10 @@ function App() {
         kind: "stitch",
         inputAssetIds: inputAssetId ? [inputAssetId] : [],
       };
+    } else {
+      // Transform — single-image input, empty prompt. User types the
+      // edit instruction or has AI chat draft one.
+      tab = { id, kind: "transform", inputAssetId, prompt: "" };
     }
     setWorkspace({
       ...workspace,
@@ -960,6 +966,11 @@ function App() {
     const source = tab.inputAssetId
       ? findAsset(workspace!, tab.inputAssetId)
       : null;
+    if (tab.kind === "transform") {
+      const firstLine = (tab.prompt ?? "").trim().split("\n")[0] ?? "";
+      const desc = shorten(firstLine, 22) || "edit";
+      return source ? `Edit "${desc}" of ${shorten(source.label, 16)}` : "New edit";
+    }
     if (tab.kind === "extract") {
       const s = tab.scrubSeconds ?? 0;
       return source
@@ -999,7 +1010,7 @@ function App() {
     activeTab?.kind === "trim" ||
     activeTab?.kind === "stitch"
       ? "video"
-      : "image";
+      : "image"; // generate + transform both consume images
   // Single-input tabs surface their pick to the gallery for highlight;
   // stitch is multi-input so no single selection is meaningful.
   const singleInputAssetId =
@@ -1205,6 +1216,28 @@ function App() {
             />
           )}
 
+          {activeTab?.kind === "transform" && (
+            <TransformTab
+              folderName={folderName}
+              externalRef={workspace.externalRef}
+              inputAsset={
+                activeTab.inputAssetId
+                  ? findAsset(workspace, activeTab.inputAssetId)
+                  : null
+              }
+              inputAssetPublicUrl={
+                activeTab.inputAssetId &&
+                findAsset(workspace, activeTab.inputAssetId)?.role === "source"
+                  ? workspace.sourceUrl
+                  : null
+              }
+              inputAssetThumbUrl={activeInputThumb}
+              prompt={activeTab.prompt}
+              onPromptChange={(p) => patchTab(activeTab.id, { prompt: p })}
+              onSave={handleAssetSave}
+            />
+          )}
+
           {!activeTab && (
             <div className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-950 p-12 text-center text-sm text-neutral-500">
               No tab open — click <strong>+</strong> in the tab strip to start.
@@ -1283,6 +1316,7 @@ function App() {
               asset={a}
               thumbnailUrl={thumbnailUrls[a.id] ?? null}
               workspace={workspace}
+              thumbnailUrls={thumbnailUrls}
               activeTabKind={activeTab?.kind ?? null}
               onClose={() => setViewerAssetId(null)}
               onUseAsInput={() => selectAssetForActiveTab(a.id)}

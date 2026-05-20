@@ -14,8 +14,9 @@ import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 import {
   chat,
   estimateCostUsd,
+  fingerprintForContext,
   parseAssistantReply,
-  SKILLS_FINGERPRINT,
+  skillContextForTab,
   type ParsedReply,
 } from "../lib/llm";
 import {
@@ -152,9 +153,12 @@ export function ChatPanel({
 
   function snapshotTabContext(): ChatMessage["tabContext"] | undefined {
     if (!activeTab) return undefined;
-    if (activeTab.kind === "generate") {
+    if (activeTab.kind === "generate" || activeTab.kind === "transform") {
+      // Both kinds have a single-image input + a prompt — same shape
+      // matters for the assistant: "this is the prompt I'm working on,
+      // this is the image I'm targeting".
       return {
-        tabKind: "generate",
+        tabKind: activeTab.kind,
         tabId: activeTab.id,
         prompt: activeTab.prompt,
         inputAssetLabel: inputLabel(activeTab, workspace),
@@ -213,8 +217,15 @@ export function ChatPanel({
       // being kicked off and now, another `setWorkspace` may have
       // committed (autosave reload, asset delete). Without the ref
       // we'd ship stale `history` from the earlier render closure.
+      // Pick the skills doc that matches the active tab's domain.
+      // Generate / Stitch / Extract / Trim → Wan animation prompts.
+      // Transform → Flux image-edit prompts. The fingerprint tagged
+      // on this assistant message reflects whichever doc was used,
+      // so future bisect-of-regression works correctly across both.
+      const skillContext = skillContextForTab(activeTab?.kind);
       const res = await chat([...historyRef.current, userMsg], {
         attachImageDataUri: attachImageDataUri ?? undefined,
+        skillContext,
       });
       onAppendMessage({
         id: newChatMessageId(),
@@ -222,7 +233,7 @@ export function ChatPanel({
         text: res.text,
         promptTokens: res.promptTokens,
         completionTokens: res.completionTokens,
-        skillsFingerprint: SKILLS_FINGERPRINT,
+        skillsFingerprint: fingerprintForContext(skillContext),
         finishReason: res.finishReason,
         createdAt: Date.now(),
       });

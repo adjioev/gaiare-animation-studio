@@ -37,6 +37,17 @@ function pointerPath(folderName: string): string {
 
 export type AssetKind = "image" | "video";
 
+/** How an asset came into being. Lets the gallery / viewer surface
+ *  lineage more meaningfully than just `kind`. Defaults to `"uploaded"`
+ *  for legacy assets that pre-date this field (load-time backfill). */
+export type AssetOriginKind =
+  | "uploaded"
+  | "transform"
+  | "extract"
+  | "generate"
+  | "trim"
+  | "stitch";
+
 export type Asset = {
   id: string;
   kind: AssetKind;
@@ -45,6 +56,8 @@ export type Asset = {
   prompt?: string;
   parentAssetIds?: string[];
   durationSec?: number;
+  /** Provenance — added 2026. Old assets backfill to `"uploaded"`. */
+  originKind?: AssetOriginKind;
   /** Special-cases. `source` = the original question image, protected
    *  from deletion (the workspace re-fetches it from `sourceUrl` on
    *  load if missing). */
@@ -94,6 +107,16 @@ export type PersistedTab =
        *  effect). Save is gated to len >= 2 in StitchTab. */
       inputAssetIds: string[];
       userLabel?: string;
+    }
+  | {
+      id: string;
+      kind: "transform";
+      /** Single image asset to edit via Flux Kontext (e.g. "remove
+       *  yellow arrows"). Result is saved as a new image asset with
+       *  `originKind: "transform"` and the source as a parent. */
+      inputAssetId: string | null;
+      prompt: string;
+      userLabel?: string;
     };
 
 /** A single turn in the AI prompt-author chat. Lives per-workspace so
@@ -109,11 +132,12 @@ export type ChatMessage = {
    *  "the input frame" references — without it the chat is blind to
    *  the studio state. */
   tabContext?: {
-    tabKind: "generate" | "extract" | "trim" | "stitch";
+    tabKind: "generate" | "extract" | "trim" | "stitch" | "transform";
     tabId: string;
-    /** For generate: the prompt text at send-time. */
+    /** For generate / transform: the prompt text at send-time. */
     prompt?: string;
-    /** For generate / extract / trim: the input asset's label. */
+    /** For generate / extract / trim / transform: the input asset's
+     *  label. */
     inputAssetLabel?: string;
   };
   /** Cumulative token cost so the UI can render "this session ate $X". */
@@ -179,13 +203,22 @@ export function relPathForAsset(
 
 /** Asset filename hints. Add a hint here only when the corresponding
  *  tab kind / AssetKind lands. `audio` will follow when narration is
- *  built; `stitched` lives here now that the Stitch tab is wired. */
+ *  built; `stitched` lives here now that the Stitch tab is wired.
+ *
+ *  `ext` overrides the default extension (jpg for images, mp4 for
+ *  videos). Used when the producer knows the file is actually a
+ *  different format — e.g. Flux Kontext outputs webp by default, so
+ *  TransformTab passes `ext: "webp"`. Without the override the file
+ *  would be webp bytes under a .jpg name, which lies to every
+ *  downstream consumer (`guessMime`, `guess_content_type` on
+ *  re-upload, etc.). */
 export function generateAssetFilename(args: {
   id: string;
   kind: AssetKind;
   hint: "source" | "clip" | "frame" | "stitched";
+  ext?: string;
 }): string {
-  const ext = args.kind === "image" ? "jpg" : "mp4";
+  const ext = args.ext ?? (args.kind === "image" ? "jpg" : "mp4");
   return `${args.hint}-${args.id}.${ext}`;
 }
 
@@ -277,9 +310,19 @@ export async function loadWorkspace(
       );
       if (!present) missingAssetIds.push(asset.id);
     }
+    // Backfill `originKind` on legacy assets — field landed 2026-05.
+    // Older workspaces written without it should still load. Heuristic:
+    // role:"source" → "uploaded"; everything else stays "uploaded"
+    // (the gallery doesn't yet act differently per originKind so a
+    // catch-all default is safe). Newly-created assets going forward
+    // set the precise kind at construction time.
+    const backfilledAssets = parsed.assets.map((a) =>
+      a.originKind ? a : ({ ...a, originKind: "uploaded" as const }),
+    );
     return {
       workspace: {
         ...parsed,
+        assets: backfilledAssets,
         // Keep assets intact even when files are missing — if we
         // pruned, the next autosave would write back a strictly
         // shrinking list and orphans would never recover.
