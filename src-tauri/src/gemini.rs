@@ -23,7 +23,11 @@ const DEFAULT_MODEL: &str = "gemini-2.5-flash-image";
 /// Models the renderer may invoke. Same defence shape as the Replicate /
 /// Fireworks allowlists — a compromised renderer can't bill an arbitrary
 /// model against the team's Google key. Adding one is a Rust rebuild.
-const ALLOWED_MODELS: &[&str] = &["gemini-2.5-flash-image", "gemini-3-pro-image-preview"];
+const ALLOWED_MODELS: &[&str] = &[
+    "gemini-2.5-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+];
 
 #[derive(Debug, Deserialize)]
 pub struct InlineImage {
@@ -69,6 +73,11 @@ pub fn rasterize_svg(svg: String, size: Option<u32>) -> Result<GeneratedImage, G
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pw, ph)
         .ok_or_else(|| GeminiError { message: "failed to allocate pixmap".into() })?;
+    // Flatten onto white instead of leaving transparent corners — a
+    // transparent background reads as black to the image model and makes
+    // it conservative ("blue disc on black"). White is the sign's
+    // conventional, unambiguous representation.
+    pixmap.fill(resvg::tiny_skia::Color::WHITE);
     resvg::render(
         &tree,
         resvg::tiny_skia::Transform::from_scale(scale, scale),

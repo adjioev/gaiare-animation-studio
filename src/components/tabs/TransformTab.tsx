@@ -18,7 +18,7 @@ import {
   uploadFileToReplicate,
   type Prediction,
 } from "../../lib/replicate";
-import { BaseDirectory, readFile, writeFile } from "@tauri-apps/plugin-fs";
+import { BaseDirectory, mkdir, readFile, writeFile } from "@tauri-apps/plugin-fs";
 import {
   absPath,
   asset,
@@ -299,30 +299,48 @@ export function TransformTab({
       canvas.height = H;
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("canvas 2d context unavailable");
+      // High-quality resampling for the resize-back composite (the Gemini
+      // crop is downscaled into the slot).
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(srcBitmap, 0, 0);
       srcBitmap.close();
 
-      // Margin around each region (fraction of the image) so Gemini has
-      // surrounding background to match tone against.
-      const PAD = 0.04;
+      // Debug (dev builds only): dump each sign's sent crop, reference and
+      // raw Gemini return into debug/<timestamp>/ so we can inspect what the
+      // model produced before the resize-back composite.
+      const DEBUG_SIGN_FIX = import.meta.env.DEV;
+      let debugDir: string | null = null;
+      if (DEBUG_SIGN_FIX) {
+        const debugStamp = new Date().toISOString().replace(/[:.]/g, "-");
+        debugDir = `${qdir(folderName, externalRef)}/debug/${debugStamp}`;
+        await mkdir(debugDir, {
+          baseDir: BaseDirectory.Document,
+          recursive: true,
+        });
+      }
+
+      // Margin around each region as a FRACTION OF THE REGION (not the
+      // image) so the crop scales with the sign. An image-relative pad was
+      // huge for a small sign (~100px on a 2560px image) and pulled
+      // neighbouring signs — which often cluster on one post — into the
+      // crop, leaving Gemini unable to tell which sign to repaint (it
+      // returned the crop unchanged).
+      const PAD_FRAC = 0.2;
 
       for (let i = 0; i < complete.length; i += 1) {
         const fix = complete[i];
         const region = fix.region as Rect;
         const label = `sign ${i + 1}/${complete.length}`;
 
-        setStatus({ state: "running", message: `${label}: fetching reference…` });
-        const ref = await fetchReferenceInline(
-          fix.referenceUrl as string,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-
-        // Padded pixel bbox, clamped to image bounds.
-        const px0 = Math.max(0, Math.round((region.x - PAD) * W));
-        const py0 = Math.max(0, Math.round((region.y - PAD) * H));
-        const px1 = Math.min(W, Math.round((region.x + region.w + PAD) * W));
-        const py1 = Math.min(H, Math.round((region.y + region.h + PAD) * H));
+        // Padded pixel bbox, clamped to image bounds. Pad scales with the
+        // region so it stays tight around the marked sign.
+        const padX = region.w * PAD_FRAC;
+        const padY = region.h * PAD_FRAC;
+        const px0 = Math.max(0, Math.round((region.x - padX) * W));
+        const py0 = Math.max(0, Math.round((region.y - padY) * H));
+        const px1 = Math.min(W, Math.round((region.x + region.w + padX) * W));
+        const py1 = Math.min(H, Math.round((region.y + region.h + padY) * H));
         const pw = Math.max(1, px1 - px0);
         const ph = Math.max(1, py1 - py0);
 
@@ -348,13 +366,50 @@ export function TransformTab({
         sy = Math.max(0, Math.min(sy, H - eh));
         const sw = ew;
         const sh = eh;
+        // Clamping ew/eh to the image bounds (sign near an edge/corner) can
+        // break the target preset ratio, so re-snap to the actual post-clamp
+        // shape — otherwise Gemini returns the old preset's aspect and the
+        // composite squashes it into the differently-shaped slot.
+        const effectivePreset = nearestPreset(sw / sh);
+
+        // Upscale the crop to a minimum size before sending to Gemini. A
+        // small sign is only ~90px even on a 2560px image, and Gemini
+        // "frames" a tiny input like a card — a white rounded border that
+        // then shows as a box when composited back. A larger crop reads as a
+        // scene excerpt and is left unframed. Bilinear upscale is fine:
+        // Gemini repaints the sign from the vector-crisp reference, not from
+        // the crop's own detail.
+        const CROP_FLOOR = 512;
+        const scaleUp = Math.max(1, CROP_FLOOR / Math.min(sw, sh));
+        const sendW = Math.round(sw * scaleUp);
+        const sendH = Math.round(sh * scaleUp);
+
+        // Reference rendered at the sign's pixel size IN THE SENT crop (so
+        // ref scale matches the target after the upscale). A reference far
+        // larger or smaller than the sign makes Gemini distort the symbol.
+        setStatus({ state: "running", message: `${label}: fetching reference…` });
+        const signPx = Math.min(
+          768,
+          Math.max(
+            96,
+            Math.round(Math.max(region.w * W, region.h * H) * scaleUp),
+          ),
+        );
+        const ref = await fetchReferenceInline(
+          fix.referenceUrl as string,
+          controller.signal,
+          signPx,
+        );
+        if (controller.signal.aborted) return;
 
         const cropCanvas = document.createElement("canvas");
-        cropCanvas.width = sw;
-        cropCanvas.height = sh;
+        cropCanvas.width = sendW;
+        cropCanvas.height = sendH;
         const cctx = cropCanvas.getContext("2d");
         if (!cctx) throw new Error("canvas 2d context unavailable");
-        cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        cctx.imageSmoothingEnabled = true;
+        cctx.imageSmoothingQuality = "high";
+        cctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sendW, sendH);
         const cropB64 = cropCanvas.toDataURL("image/png").split(",")[1] ?? "";
 
         setStatus({ state: "running", message: `${label}: Gemini…` });
@@ -362,9 +417,31 @@ export function TransformTab({
           crop: { mime_type: "image/png", data: cropB64 },
           reference: ref,
           prompt: prompt.trim() || "Match the sign to the reference.",
-          aspectRatio: preset.label,
+          aspectRatio: effectivePreset.label,
         });
         if (controller.signal.aborted) return;
+
+        // Debug dump: crop we sent, the reference, and Gemini's raw return.
+        if (DEBUG_SIGN_FIX && debugDir) {
+          const n = i + 1;
+          const refExt =
+            ref.mime_type.split("/")[1]?.replace("+xml", "") || "png";
+          await writeFile(
+            `${debugDir}/sign-${n}-crop.png`,
+            base64ToBytes(cropB64),
+            { baseDir: BaseDirectory.Document },
+          );
+          await writeFile(
+            `${debugDir}/sign-${n}-ref.${refExt}`,
+            base64ToBytes(ref.data),
+            { baseDir: BaseDirectory.Document },
+          );
+          await writeFile(
+            `${debugDir}/sign-${n}-out.png`,
+            base64ToBytes(out.dataB64),
+            { baseDir: BaseDirectory.Document },
+          );
+        }
 
         // Returned crop is at the preset aspect = the slot aspect, so the
         // resize back into (sx,sy,sw,sh) is a clean fit, not a squash.
@@ -403,6 +480,9 @@ export function TransformTab({
       };
       await onSave(newAsset);
       setLatestUrl(await asset(rel));
+      if (DEBUG_SIGN_FIX && debugDir) {
+        console.log("[sign-fix] debug crops:", await absPath(debugDir));
+      }
       setStatus({ state: "done", message: "saved to gallery" });
     } catch (e) {
       // A superseded run (a newer Generate aborted this one) must not
