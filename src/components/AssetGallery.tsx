@@ -8,6 +8,46 @@ import { useEffect, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { isLockedAsset, type Asset, type AssetKind } from "../lib/workspace";
 import { DRAG_PAYLOAD_MIME, encodeDragPayload } from "../lib/drag";
+import type { StudioSubmission } from "../lib/rails";
+
+const SUBMISSION_STATUS_PILL: Record<StudioSubmission["status"], string> = {
+  proposed: "bg-neutral-700 text-neutral-200",
+  approved: "bg-emerald-900/50 text-emerald-300",
+  rejected: "bg-rose-900/50 text-rose-300",
+};
+
+export type UploadStatus = "pending" | "uploading" | "done" | "failed";
+
+/** One queued "Submit for review" upload. The queue drains serially (one
+ *  upload at a time) — see the processor in App. `kind` is carried for the
+ *  upload call; the panel only shows label + status. */
+export type UploadItem = {
+  assetId: string;
+  label: string;
+  kind: "enhanced_image" | "video";
+  status: UploadStatus;
+  error?: string;
+  // Captured at enqueue time so a workspace switch mid-drain can't retarget
+  // a queued upload.
+  questionId: number;
+  externalRef: string;
+  folderName: string;
+  filename: string;
+};
+
+const UPLOAD_STATUS_ICON: Record<UploadStatus, string> = {
+  pending: "⏳",
+  uploading: "⬆",
+  done: "✓",
+  failed: "✗",
+};
+
+const UPLOAD_STATUS_TEXT: Record<UploadStatus, string> = {
+  pending: "text-neutral-300",
+  uploading: "text-neutral-300",
+  done: "text-emerald-300",
+  failed: "text-rose-300",
+};
 
 export function AssetGallery({
   assets,
@@ -15,6 +55,7 @@ export function AssetGallery({
   onSelect,
   onRequestDelete,
   onRename,
+  onSubmit,
   activeKind,
   onPickIncompatible,
   onPreview,
@@ -22,6 +63,11 @@ export function AssetGallery({
   onToggleTag,
   onClearTags,
   thumbnailUrls,
+  uploadQueue,
+  onCancelUpload,
+  onRetryUpload,
+  onClearFinishedUploads,
+  serverSubmissions,
 }: {
   assets: Asset[];
   selectedAssetId: string | null;
@@ -32,6 +78,10 @@ export function AssetGallery({
   /** Rename an asset's label (double-click the name). Persists via the
    *  caller. Allowed on locked assets too — rename ≠ delete. */
   onRename: (id: string, label: string) => void;
+  /** Submit this asset (image/video) to Rails as a proposal for review.
+   *  Caller validates connection + question id and reports status. Only
+   *  offered on unlocked (user-generated) assets. */
+  onSubmit?: (id: string) => void;
   /** Which kind the active tab consumes — used for highlight + dimming. */
   activeKind: AssetKind;
   /** Called when the user clicks an asset whose kind doesn't match the
@@ -48,6 +98,15 @@ export function AssetGallery({
   onToggleTag: (id: string) => void;
   onClearTags: () => void;
   thumbnailUrls: Record<string, string>;
+  /** Serial "Submit for review" upload queue, rendered as a pinned panel
+   *  at the bottom. Cancel acts on pending items, retry on failed ones. */
+  uploadQueue?: UploadItem[];
+  onCancelUpload?: (assetId: string) => void;
+  onRetryUpload?: (assetId: string) => void;
+  onClearFinishedUploads?: () => void;
+  /** The question's proposals already submitted to Rails + their review
+   *  status (server state, fetched on open / after upload). Read-only. */
+  serverSubmissions?: StudioSubmission[];
 }) {
   const images = assets.filter((a) => a.kind === "image");
   const videos = assets.filter((a) => a.kind === "video");
@@ -118,6 +177,7 @@ export function AssetGallery({
           onSelect={onSelect}
           onRequestDelete={onRequestDelete}
           onRename={onRename}
+          onSubmit={onSubmit}
           onPickIncompatible={(id) => onPickIncompatible(id, "image")}
           onPreview={onPreview}
           activeKind={activeKind}
@@ -134,6 +194,7 @@ export function AssetGallery({
           onSelect={onSelect}
           onRequestDelete={onRequestDelete}
           onRename={onRename}
+          onSubmit={onSubmit}
           onPickIncompatible={(id) => onPickIncompatible(id, "video")}
           onPreview={onPreview}
           activeKind={activeKind}
@@ -143,6 +204,126 @@ export function AssetGallery({
           empty="No videos yet — generate one from the Generate Clip tab."
         />
       </div>
+
+      {serverSubmissions && serverSubmissions.length > 0 && (
+        <div className="shrink-0 border-t border-neutral-800 p-2">
+          <div className="mb-1 px-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+              Submitted for review · {serverSubmissions.length}
+            </span>
+          </div>
+          <ul className="max-h-44 space-y-1 overflow-y-auto">
+            {serverSubmissions.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center gap-2 rounded px-1 py-1"
+              >
+                <div className="h-9 w-12 shrink-0 overflow-hidden rounded bg-neutral-900">
+                  {s.kind === "enhanced_image" ? (
+                    <img
+                      src={s.s3_url}
+                      alt=""
+                      loading="lazy"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-[9px] text-neutral-500">
+                      mp4
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={clsx(
+                        "rounded px-1.5 py-0.5 text-[10px]",
+                        SUBMISSION_STATUS_PILL[s.status],
+                      )}
+                    >
+                      {s.status}
+                    </span>
+                    <span className="truncate text-[10px] text-neutral-500">
+                      {s.kind === "video" ? "video" : "image"}
+                      {s.submitted_at
+                        ? ` · ${new Date(s.submitted_at).toLocaleDateString()}`
+                        : ""}
+                    </span>
+                  </div>
+                  {s.reject_reason && (
+                    <p
+                      className="mt-0.5 truncate text-[10px] text-rose-300"
+                      title={s.reject_reason}
+                    >
+                      {s.reject_reason}
+                    </p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {uploadQueue && uploadQueue.length > 0 && (
+        <div className="shrink-0 border-t border-neutral-800 p-2">
+          <div className="mb-1 flex items-center justify-between px-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+              Uploads ·{" "}
+              {uploadQueue.filter((i) => i.status === "done").length}/
+              {uploadQueue.length}
+            </span>
+            {uploadQueue.some(
+              (i) => i.status === "done" || i.status === "failed",
+            ) && (
+              <button
+                onClick={onClearFinishedUploads}
+                className="rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-neutral-900 hover:text-neutral-300"
+              >
+                Clear done
+              </button>
+            )}
+          </div>
+          <ul className="max-h-40 space-y-0.5 overflow-y-auto">
+            {uploadQueue.map((item) => (
+              <li
+                key={item.assetId}
+                className="flex items-center gap-2 rounded px-1.5 py-1 text-[11px]"
+              >
+                <span className="w-4 shrink-0 text-center" aria-hidden>
+                  {UPLOAD_STATUS_ICON[item.status]}
+                </span>
+                <span
+                  className={clsx(
+                    "min-w-0 flex-1 truncate",
+                    UPLOAD_STATUS_TEXT[item.status],
+                  )}
+                  title={item.error ?? item.label}
+                >
+                  {item.label}
+                </span>
+                {item.status === "pending" && onCancelUpload && (
+                  <button
+                    onClick={() => onCancelUpload(item.assetId)}
+                    title="Cancel"
+                    className="shrink-0 rounded px-1 text-neutral-500 hover:text-rose-300"
+                  >
+                    ×
+                  </button>
+                )}
+                {item.status === "failed" && onRetryUpload && (
+                  <button
+                    onClick={() => onRetryUpload(item.assetId)}
+                    title="Retry"
+                    className="shrink-0 rounded px-1 text-neutral-500 hover:text-sky-300"
+                  >
+                    ↻
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </aside>
   );
 }
@@ -155,6 +336,7 @@ function Section({
   onSelect,
   onRequestDelete,
   onRename,
+  onSubmit,
   onPickIncompatible,
   onPreview,
   activeKind,
@@ -170,6 +352,7 @@ function Section({
   onSelect: (id: string) => void;
   onRequestDelete: (id: string) => void;
   onRename: (id: string, label: string) => void;
+  onSubmit?: (id: string) => void;
   onPickIncompatible: (id: string) => void;
   onPreview: (id: string) => void;
   activeKind: AssetKind;
@@ -221,6 +404,7 @@ function Section({
                   onDelete={() => onRequestDelete(asset.id)}
                   onPreview={() => onPreview(asset.id)}
                   onRename={(label) => onRename(asset.id, label)}
+                  onSubmit={onSubmit ? () => onSubmit(asset.id) : undefined}
                 />
               </li>
             );
@@ -242,6 +426,7 @@ function AssetCard({
   onDelete,
   onPreview,
   onRename,
+  onSubmit,
 }: {
   asset: Asset;
   isSelected: boolean;
@@ -255,6 +440,7 @@ function AssetCard({
   onDelete: () => void;
   onPreview: () => void;
   onRename: (label: string) => void;
+  onSubmit?: () => void;
 }) {
   // Inline label rename — double-click the name to edit.
   const [editing, setEditing] = useState(false);
@@ -435,6 +621,18 @@ function AssetCard({
         >
           👁
         </button>
+        {onSubmit && !isLockedAsset(asset) && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSubmit();
+            }}
+            title="Submit for review — upload this artwork to Rails"
+            className="invisible flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-sky-900/40 hover:text-sky-300 group-hover:visible"
+          >
+            ☁
+          </button>
+        )}
         {isLockedAsset(asset) ? (
           <span
             title={

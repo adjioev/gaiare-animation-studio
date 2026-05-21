@@ -7,12 +7,17 @@
 //! secret stays in this process.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Mutex;
 
 use keyring::Entry;
+use reqwest::multipart;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::fs;
 use url::Url;
+
+use crate::safe_path::assert_safe_document_path;
 
 const KEYCHAIN_SERVICE: &str = "gaiare-animation-studio.rails-token";
 
@@ -68,12 +73,16 @@ impl From<reqwest::Error> for RailsError {
     }
 }
 
-fn client() -> reqwest::Client {
+fn build_client(timeout_secs: u64) -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent("gaiare-animation-studio/0.1")
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .expect("reqwest client init")
+}
+
+fn client() -> reqwest::Client {
+    build_client(15)
 }
 
 fn keychain_entry(server_url: &str) -> Result<Entry, RailsError> {
@@ -255,4 +264,115 @@ pub async fn rails_get_question(server_url: String, id: String) -> Result<Value,
 #[tauri::command]
 pub async fn rails_list_countries(server_url: String) -> Result<Value, RailsError> {
     api_get(&server_url, "api/v1/studio/countries", None).await
+}
+
+#[tauri::command]
+pub async fn rails_list_submissions(
+    server_url: String,
+    question_id: String,
+) -> Result<Value, RailsError> {
+    let path = format!("api/v1/studio/questions/{question_id}/submissions");
+    api_get(&server_url, &path, None).await
+}
+
+/// Mirror the Rails endpoint's 20 MB cap so we fail before slurping a huge
+/// file into memory.
+const MAX_SUBMIT_BYTES: u64 = 20 * 1024 * 1024;
+
+/// `(content_type, expected_extension)` for a submission kind — one place
+/// so the MIME we declare and the file we accept can't drift apart.
+fn kind_format(kind: &str) -> Option<(&'static str, &'static str)> {
+    match kind {
+        "enhanced_image" => Some(("image/png", "png")),
+        "video" => Some(("video/mp4", "mp4")),
+        _ => None,
+    }
+}
+
+/// Upload a studio-produced artwork (image / video) as a `proposed`
+/// submission for a question. Multipart POST with the bearer token kept
+/// server-side. `question_id` is the Rails DB id (the submissions route is
+/// non-glob). `file_path` must resolve inside the user's Documents folder.
+#[tauri::command]
+pub async fn rails_submit_artifact(
+    server_url: String,
+    question_id: String,
+    kind: String,
+    file_path: String,
+    note: Option<String>,
+) -> Result<Value, RailsError> {
+    validate_server(&server_url)?;
+    let token = token_for(&server_url)?;
+
+    let (content_type, expected_ext) = kind_format(&kind)
+        .ok_or_else(|| RailsError::new("bad_kind", "kind must be enhanced_image or video"))?;
+
+    // Refuse paths outside Documents (same guard as replicate_upload_file)
+    // so a renderer bug can't exfiltrate an arbitrary file.
+    let canon = assert_safe_document_path(Path::new(&file_path))
+        .map_err(|e| RailsError::new("bad_path", e.message))?;
+
+    // The declared content-type comes from `kind`, so the actual file must
+    // match — otherwise we'd send e.g. webp bytes labelled image/png.
+    let ext = canon
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext != expected_ext {
+        return Err(RailsError::new(
+            "unsupported_file",
+            format!("{kind} must be a .{expected_ext} file (got .{ext})"),
+        ));
+    }
+
+    let meta = fs::metadata(&canon).await.map_err(|e| {
+        RailsError::new("file_read_error", format!("stat failed for {}: {e}", canon.display()))
+    })?;
+    if meta.len() > MAX_SUBMIT_BYTES {
+        return Err(RailsError::new(
+            "too_large",
+            format!("file too large: {} bytes (limit {MAX_SUBMIT_BYTES})", meta.len()),
+        ));
+    }
+
+    let bytes = fs::read(&canon).await.map_err(|e| {
+        RailsError::new("file_read_error", format!("failed to read {}: {e}", canon.display()))
+    })?;
+    let filename = canon
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("upload")
+        .to_string();
+
+    let part = multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(content_type)
+        .map_err(|e| RailsError::new("bad_mime", format!("invalid content type: {e}")))?;
+    let mut form = multipart::Form::new().text("kind", kind).part("file", part);
+    if let Some(note) = note {
+        let note = note.trim().to_string();
+        if !note.is_empty() {
+            form = form.text("note", note);
+        }
+    }
+
+    let path = format!("api/v1/studio/questions/{question_id}/submissions");
+    // Generous timeout — a video upload over a slow link far outlasts the
+    // 15s API-read default.
+    let res = build_client(300)
+        .post(endpoint(&server_url, &path))
+        .header("Authorization", format!("Bearer {token}"))
+        .multipart(form)
+        .send()
+        .await?;
+    let status = res.status();
+    if status.is_success() {
+        return Ok(res.json::<Value>().await?);
+    }
+    let body = res.text().await.unwrap_or_default();
+    Err(RailsError::new(
+        map_status(status),
+        format!("Rails {status}: {}", body.chars().take(300).collect::<String>()),
+    ))
 }

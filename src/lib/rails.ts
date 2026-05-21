@@ -33,6 +33,20 @@ export type StudioQuestion = {
 
 export type StudioCountry = { code: string; name: string };
 
+/** An artwork proposal (enhanced image / video) submitted back to Rails
+ *  for admin review. */
+export type StudioSubmission = {
+  id: number;
+  question_id: number;
+  kind: "enhanced_image" | "video";
+  status: "proposed" | "approved" | "rejected";
+  s3_url: string;
+  note: string | null;
+  reject_reason: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+};
+
 /** A correct sign for a question (detail/show only), for the sign-fix
  *  flow. `svg_url` is the canonical reference to repaint from. */
 export type StudioSign = {
@@ -114,6 +128,39 @@ export async function getQuestion(
   const res = await invoke<{ data: StudioQuestion }>("rails_get_question", {
     serverUrl,
     id: idOrComposite,
+  });
+  return res.data;
+}
+
+/** List a question's artwork proposals (newest first) — what's already
+ *  been submitted for review and each one's status. */
+export async function listSubmissions(
+  serverUrl: string,
+  questionId: number,
+): Promise<StudioSubmission[]> {
+  const res = await invoke<{ data: StudioSubmission[] }>(
+    "rails_list_submissions",
+    { serverUrl, questionId: String(questionId) },
+  );
+  return res.data;
+}
+
+/** Upload a finished artwork (image/video) as a `proposed` submission for
+ *  a question. `filePath` is an absolute path inside the user's Documents
+ *  folder; the bytes go through the Rust proxy (token stays server-side). */
+export async function submitArtifact(args: {
+  serverUrl: string;
+  questionId: number;
+  kind: "enhanced_image" | "video";
+  filePath: string;
+  note?: string;
+}): Promise<StudioSubmission> {
+  const res = await invoke<{ data: StudioSubmission }>("rails_submit_artifact", {
+    serverUrl: args.serverUrl,
+    questionId: String(args.questionId),
+    kind: args.kind,
+    filePath: args.filePath,
+    note: args.note ?? null,
   });
   return res.data;
 }

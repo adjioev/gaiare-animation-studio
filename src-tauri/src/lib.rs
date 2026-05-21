@@ -18,7 +18,8 @@ use gemini::{gemini_generate_image, rasterize_svg};
 use llm::fireworks_chat;
 use rails::{
     rails_connect, rails_disconnect, rails_get_question, rails_is_connected,
-    rails_list_countries, rails_list_questions,
+    rails_list_countries, rails_list_questions, rails_list_submissions,
+    rails_submit_artifact,
 };
 use replicate::{
     replicate_cancel_prediction, replicate_create_prediction,
@@ -269,6 +270,8 @@ pub fn run() {
             rails_list_questions,
             rails_get_question,
             rails_list_countries,
+            rails_list_submissions,
+            rails_submit_artifact,
             arm_quit,
             force_quit,
             cancel_quit,

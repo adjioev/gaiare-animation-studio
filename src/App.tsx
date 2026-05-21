@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 import {
+  absPath,
   asset as resolveAsset,
   downloadInto,
   ensureWorkdir,
@@ -36,7 +37,7 @@ import {
   listForeignFreshLocks,
   releaseLock,
 } from "./lib/lock";
-import { AssetGallery } from "./components/AssetGallery";
+import { AssetGallery, type UploadItem } from "./components/AssetGallery";
 import { TabStrip } from "./components/TabStrip";
 import { GenerateClipTab } from "./components/tabs/GenerateClipTab";
 import { ExtractFrameTab } from "./components/tabs/ExtractFrameTab";
@@ -59,7 +60,13 @@ import {
 } from "./lib/prompt-library";
 import { Button, errorMessage, shorten } from "./components/ui";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
-import { getQuestion, isRailsConnected } from "./lib/rails";
+import {
+  getQuestion,
+  isRailsConnected,
+  listSubmissions,
+  submitArtifact,
+  type StudioSubmission,
+} from "./lib/rails";
 
 const DEFAULT_EXTERNAL_REF = "14";
 const DEFAULT_SOURCE_URL =
@@ -166,6 +173,19 @@ function App() {
   const lockRef = useRef<
     { folderName: string; externalRef: string; contractorId: string } | null
   >(null);
+
+  /** Serial "Submit for review" upload queue. The ☁ button enqueues; a
+   *  processor effect drains it one upload at a time (no memory spike from
+   *  many parallel reads, no banner chaos). */
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
+  const queueProcessingRef = useRef(false);
+
+  /** The current question's server-side proposals (what's already submitted
+   *  + review status). Re-fetched when the question / connection changes and
+   *  after each upload. Server state — not persisted to workspace.json. */
+  const [serverSubmissions, setServerSubmissions] = useState<StudioSubmission[]>(
+    [],
+  );
 
   function pushWarning(id: string, message: string) {
     setWarnings((w) => {
@@ -623,6 +643,11 @@ function App() {
       "enhanced_safe",
       "Enhanced (safe)",
     );
+    // Remember the Rails DB id so artwork proposals can be submitted back
+    // (the submissions endpoint is keyed by DB id, not external_ref).
+    if (args.questionId != null) {
+      ws = { ...ws, railsQuestionId: args.questionId };
+    }
     // Pull the question's correct signs from Rails (detail endpoint) so
     // sign-fix can auto-load references. Best-effort: skipped if not
     // connected or the question has no resolvable signs.
@@ -794,6 +819,144 @@ function App() {
       console.error("[workspace] rename save failed", e);
     }
   }
+
+  // Enqueue a produced artwork (image/video) for "Submit for review".
+  // No per-item confirm — the serial queue panel (with cancel/retry) is the
+  // control. Capture the question id / paths NOW so a later workspace switch
+  // can't retarget the upload. Needs a live Rails connection + the
+  // question's DB id (captured when opened from the browser).
+  function handleSubmitAsset(id: string) {
+    if (!workspace) return;
+    const a = findAsset(workspace, id);
+    if (!a) return;
+    if (!settings.railsServer) {
+      pushWarning("submit-noconn", "Connect to Rails in Settings before submitting for review.");
+      return;
+    }
+    if (workspace.railsQuestionId == null) {
+      pushWarning(
+        "submit-noid",
+        "Re-open this question from the Rails browser to enable Submit (it captures the question id).",
+      );
+      return;
+    }
+    const item: UploadItem = {
+      assetId: id,
+      label: a.label,
+      kind: a.kind === "video" ? "video" : "enhanced_image",
+      status: "pending",
+      questionId: workspace.railsQuestionId,
+      externalRef: workspace.externalRef,
+      folderName,
+      filename: a.filename,
+    };
+    setUploadQueue((q) => {
+      const existing = q.find((i) => i.assetId === id);
+      // Already queued or mid-upload → ignore the repeat click.
+      if (existing && (existing.status === "pending" || existing.status === "uploading")) {
+        return q;
+      }
+      // Re-queue a prior done/failed entry in place; otherwise append.
+      return existing ? q.map((i) => (i.assetId === id ? item : i)) : [...q, item];
+    });
+  }
+
+  // Serial queue processor — uploads one pending item at a time.
+  useEffect(() => {
+    if (queueProcessingRef.current) return;
+    const next = uploadQueue.find((i) => i.status === "pending");
+    if (!next) return;
+    const server = settings.railsServer;
+    if (!server) return; // not connected — leave items pending
+    queueProcessingRef.current = true;
+    setUploadQueue((q) =>
+      q.map((i) => (i.assetId === next.assetId ? { ...i, status: "uploading" } : i)),
+    );
+    // Clear the re-entrancy guard AND write the result together — the
+    // re-render this triggers is the drain's only re-trigger, and it must
+    // see the guard already down so it picks up the next pending item.
+    const finish = (patch: { status: UploadItem["status"]; error?: string }) => {
+      queueProcessingRef.current = false;
+      setUploadQueue((q) =>
+        q.map((i) => (i.assetId === next.assetId ? { ...i, ...patch } : i)),
+      );
+    };
+    void (async () => {
+      try {
+        const abs = await absPath(
+          relPathForAsset(next.folderName, next.externalRef, {
+            filename: next.filename,
+          } as Asset),
+        );
+        await submitArtifact({
+          serverUrl: server.url,
+          questionId: next.questionId,
+          kind: next.kind,
+          filePath: abs,
+        });
+        finish({ status: "done" });
+        void refreshSubmissions(next.questionId);
+      } catch (e) {
+        finish({ status: "failed", error: errorMessage(e) });
+      }
+    })();
+  }, [uploadQueue, settings.railsServer]);
+
+  function cancelUpload(assetId: string) {
+    setUploadQueue((q) =>
+      q.filter((i) => !(i.assetId === assetId && i.status === "pending")),
+    );
+  }
+
+  function retryUpload(assetId: string) {
+    setUploadQueue((q) =>
+      q.map((i) =>
+        i.assetId === assetId && i.status === "failed"
+          ? { ...i, status: "pending", error: undefined }
+          : i,
+      ),
+    );
+  }
+
+  function clearFinishedUploads() {
+    setUploadQueue((q) =>
+      q.filter((i) => i.status === "pending" || i.status === "uploading"),
+    );
+  }
+
+  async function refreshSubmissions(questionId: number) {
+    const server = settings.railsServer;
+    if (!server) return;
+    try {
+      setServerSubmissions(await listSubmissions(server.url, questionId));
+    } catch {
+      // best-effort — a fetch failure must never block the studio
+    }
+  }
+
+  // Load the current question's proposals when the question or connection
+  // changes (covers open + workspace switch + connect). The `stale` guard
+  // drops a slow fetch whose question/connection is no longer current, so a
+  // rapid switch can't leave the previous question's list on screen.
+  useEffect(() => {
+    const qid = workspace?.railsQuestionId;
+    const server = settings.railsServer;
+    if (qid == null || !server) {
+      setServerSubmissions([]);
+      return;
+    }
+    let stale = false;
+    void listSubmissions(server.url, qid)
+      .then((list) => {
+        if (!stale) setServerSubmissions(list);
+      })
+      .catch(() => {
+        // best-effort — never block the studio on a fetch failure
+      });
+    return () => {
+      stale = true;
+    };
+  }, [workspace?.railsQuestionId, settings.railsServer]);
 
   function handleAssetDelete(id: string) {
     if (!workspace) return;
@@ -1291,6 +1454,12 @@ function App() {
         onSelect={selectAssetForActiveTab}
         onRequestDelete={handleAssetDelete}
         onRename={handleAssetRename}
+        onSubmit={handleSubmitAsset}
+        uploadQueue={uploadQueue}
+        onCancelUpload={cancelUpload}
+        onRetryUpload={retryUpload}
+        onClearFinishedUploads={clearFinishedUploads}
+        serverSubmissions={serverSubmissions}
         activeKind={activeKind}
         onPickIncompatible={pickIncompatibleAsset}
         onPreview={setViewerAssetId}

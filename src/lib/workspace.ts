@@ -199,6 +199,11 @@ export type Workspace = {
    *  (reference = the sign's SVG). Empty/absent when not connected or the
    *  question has no resolvable signs. */
   questionSigns?: { code: string; name: string | null; svgUrl: string }[];
+  /** Rails DB id of the question, captured when opened from the browser.
+   *  Needed to submit artwork proposals back to Rails (the submissions
+   *  endpoint is keyed by DB id). Absent on workspaces created/opened
+   *  before this field, or by manual entry — re-open from Rails to set it. */
+  railsQuestionId?: number;
   updatedAt: number;
 };
 
