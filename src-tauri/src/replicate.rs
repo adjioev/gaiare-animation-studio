@@ -153,6 +153,38 @@ pub async fn replicate_create_prediction(
     .await
 }
 
+/// A Replicate version hash is exactly 64 hex characters. Validating the
+/// shape (rather than allowlisting specific hashes) lets the renderer pin
+/// model versions in TypeScript — model upgrades stay a TS change — while
+/// still stopping a compromised renderer from smuggling an arbitrary path
+/// or URL through the `version` field.
+fn is_valid_version_hash(v: &str) -> bool {
+    v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Create a prediction pinned to a specific model VERSION hash. The
+/// image-enhance models (SeedVR2, Clarity) are pinned by version for
+/// reproducibility across the content pipeline; the renderer holds the
+/// hashes and this command POSTs `{version, input}` to `/v1/predictions`.
+#[tauri::command]
+pub async fn replicate_create_prediction_by_version(
+    version: String,
+    input: Value,
+) -> Result<Value, ReplicateError> {
+    if !is_valid_version_hash(&version) {
+        return Err(ReplicateError {
+            message: "invalid Replicate version hash (expected 64 hex chars)".into(),
+        });
+    }
+    let body = serde_json::json!({ "version": version, "input": input });
+    request_json(
+        reqwest::Method::POST,
+        &format!("{REPLICATE_BASE}/predictions"),
+        Some(body),
+    )
+    .await
+}
+
 /// Fetch the current state of a prediction. The renderer drives the
 /// poll loop and decides when to stop.
 #[tauri::command]

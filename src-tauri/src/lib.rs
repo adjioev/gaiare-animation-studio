@@ -21,8 +21,8 @@ use rails::{
     rails_list_countries, rails_list_questions,
 };
 use replicate::{
-    replicate_cancel_prediction, replicate_create_prediction, replicate_get_prediction,
-    replicate_upload_file,
+    replicate_cancel_prediction, replicate_create_prediction,
+    replicate_create_prediction_by_version, replicate_get_prediction, replicate_upload_file,
 };
 use safe_path::assert_safe_document_path_cmd;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
@@ -255,6 +255,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             replicate_create_prediction,
+            replicate_create_prediction_by_version,
             replicate_get_prediction,
             replicate_cancel_prediction,
             replicate_upload_file,

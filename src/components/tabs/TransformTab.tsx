@@ -14,10 +14,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   FLUX_KONTEXT_COST_USD,
+  runClarity,
   runFluxKontext,
+  runSeedVR2,
   uploadFileToReplicate,
   type Prediction,
 } from "../../lib/replicate";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { BaseDirectory, mkdir, readFile, writeFile } from "@tauri-apps/plugin-fs";
 import {
   absPath,
@@ -107,6 +110,10 @@ export function TransformTab({
 }) {
   const [status, setStatus] = useState<Status>({ state: "idle" });
   const [latestUrl, setLatestUrl] = useState<string | null>(null);
+  // Image-operation mode: "edit" (Flux edit + Gemini sign-fix) or "enhance"
+  // (SeedVR2 upscale + Clarity polish). Enhance has no parameters, so it
+  // lives here as a mode rather than its own tab.
+  const [mode, setMode] = useState<"edit" | "enhance">("edit");
   const abortRef = useRef<AbortController | null>(null);
 
   // Sign-fix state. Each fix pairs one marked region with one reference
@@ -504,6 +511,141 @@ export function TransformTab({
     }
   }
 
+  // Image enhance — SeedVR2 upscale (+ crop to 1280×800) or Clarity polish.
+  // Both produce a new, UNLOCKED image asset (originKind "enhance") so the
+  // admin can iterate/delete — unlike the role-locked variants pulled from
+  // Rails. Mirrors the mastra pipeline's models/inputs.
+  async function runEnhanceGenerate(model: "seedvr2" | "clarity") {
+    if (!inputAsset) {
+      setStatus({
+        state: "error",
+        message: "Pick an image from the gallery first.",
+      });
+      return;
+    }
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLatestUrl(null);
+
+    const name = model === "seedvr2" ? "SeedVR2" : "Clarity";
+    try {
+      // Resolve input URL — public CDN if available, else upload the local
+      // file (a stored remoteUrl may be an expired Replicate Files link).
+      let imageUrl: string;
+      if (inputAssetPublicUrl) {
+        imageUrl = inputAssetPublicUrl;
+      } else {
+        setStatus({ state: "running", message: "uploading image…" });
+        const localAbs = await absPath(
+          relPathForAsset(folderName, externalRef, inputAsset),
+        );
+        imageUrl = await uploadFileToReplicate(localAbs);
+        if (controller.signal.aborted) return;
+      }
+
+      const onTick = (p: Prediction<string>) =>
+        setStatus({ state: "running", message: `${name} ${p.status}…` });
+
+      await ensureWorkdir(folderName, externalRef);
+      const newId = newAssetId();
+      const filename = generateAssetFilename({
+        id: newId,
+        kind: "image",
+        hint: "enhanced",
+        ext: "png",
+      });
+      const rel = `${qdir(folderName, externalRef)}/${filename}`;
+
+      let label: string;
+      let engine: "seedvr2" | "clarity";
+
+      if (model === "seedvr2") {
+        setStatus({ state: "running", message: `${name}…` });
+        const resultUrl = await runSeedVR2(imageUrl, {
+          signal: controller.signal,
+          onTick,
+        });
+        if (controller.signal.aborted) return;
+
+        // Cover-crop to 1280×800 (mirrors the mastra pipeline's sharp crop).
+        setStatus({ state: "running", message: "cropping to 1280×800…" });
+        const res = await tauriFetch(resultUrl, { signal: controller.signal });
+        if (!res.ok) throw new Error(`${name} download failed: ${res.status}`);
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        const bitmap = await createImageBitmap(new Blob([bytes]));
+        if (controller.signal.aborted) {
+          bitmap.close();
+          return;
+        }
+        const TW = 1280;
+        const TH = 800;
+        const canvas = document.createElement("canvas");
+        canvas.width = TW;
+        canvas.height = TH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("canvas 2d context unavailable");
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        const scale = Math.max(TW / bitmap.width, TH / bitmap.height);
+        const dw = bitmap.width * scale;
+        const dh = bitmap.height * scale;
+        ctx.drawImage(bitmap, (TW - dw) / 2, (TH - dh) / 2, dw, dh);
+        bitmap.close();
+        const b64 = canvas.toDataURL("image/png").split(",")[1] ?? "";
+        await writeFile(rel, base64ToBytes(b64), {
+          baseDir: BaseDirectory.Document,
+        });
+        label = "Enlarge & sharpen";
+        engine = "seedvr2";
+      } else {
+        setStatus({ state: "running", message: `${name}…` });
+        const resultUrl = await runClarity(imageUrl, {
+          signal: controller.signal,
+          onTick,
+        });
+        if (controller.signal.aborted) return;
+        setStatus({ state: "running", message: "downloading…" });
+        await downloadInto({
+          folderName,
+          externalRef,
+          filename,
+          url: resultUrl,
+          signal: controller.signal,
+        });
+        label = "Polish detail";
+        engine = "clarity";
+      }
+      if (controller.signal.aborted) return;
+
+      const newAsset: Asset = {
+        id: newId,
+        kind: "image",
+        originKind: "enhance",
+        engine,
+        filename,
+        label,
+        parentAssetIds: [inputAsset.id],
+        createdAt: Date.now(),
+      };
+      await onSave(newAsset);
+      setLatestUrl(await asset(rel));
+      setStatus({ state: "done", message: "saved to gallery" });
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      if ((e as Error).name === "AbortError") {
+        setStatus({ state: "idle" });
+        return;
+      }
+      setStatus({ state: "error", message: errorMessage(e) });
+    }
+  }
+
+  function handleEnhance(model: "seedvr2" | "clarity") {
+    void runEnhanceGenerate(model);
+  }
+
   const generateDisabled =
     status.state === "running" ||
     (signFixMode ? completeFixes.length === 0 : !prompt.trim());
@@ -569,6 +711,73 @@ export function TransformTab({
             </div>
           </div>
 
+          {/* Mode toggle — Edit (Flux/Gemini sign-fix) vs Enhance (SeedVR2
+              upscale + Clarity polish). Both are image→image operations. */}
+          <div className="mb-4 inline-flex gap-0.5 rounded-lg border border-neutral-800 bg-neutral-900 p-0.5 text-xs">
+            <button
+              onClick={() => setMode("edit")}
+              className={`rounded-md px-3 py-1 ${
+                mode === "edit"
+                  ? "bg-neutral-700 text-white"
+                  : "text-neutral-400 hover:text-neutral-200"
+              }`}
+            >
+              🪄 Edit
+            </button>
+            <button
+              onClick={() => setMode("enhance")}
+              className={`rounded-md px-3 py-1 ${
+                mode === "enhance"
+                  ? "bg-neutral-700 text-white"
+                  : "text-neutral-400 hover:text-neutral-200"
+              }`}
+            >
+              🔼 Enhance
+            </button>
+          </div>
+
+          {mode === "enhance" ? (
+            <div className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
+              <p className="mb-1 text-xs uppercase tracking-wide text-neutral-400">
+                Enhance image
+              </p>
+              <p className="mb-4 text-[11px] text-neutral-500">
+                Make the image larger and crisper. Each saves a new image asset
+                linked to the source.
+              </p>
+
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <Button
+                    onClick={() => handleEnhance("seedvr2")}
+                    disabled={status.state === "running"}
+                    className="w-44 shrink-0 justify-center"
+                  >
+                    ⬆ Enlarge &amp; sharpen
+                  </Button>
+                  <p className="text-[11px] leading-relaxed text-neutral-400">
+                    Turns a small, soft image into a large sharp one and crops it
+                    to 1280×800. <span className="text-neutral-600">(SeedVR2)</span>
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <Button
+                    onClick={() => handleEnhance("clarity")}
+                    disabled={status.state === "running"}
+                    className="w-44 shrink-0 justify-center"
+                  >
+                    ✨ Polish detail
+                  </Button>
+                  <p className="text-[11px] leading-relaxed text-neutral-400">
+                    Adds extra crispness and fine detail to an image.{" "}
+                    <span className="text-neutral-600">(Clarity)</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : (
+          <>
           <div className="mb-1 flex items-center justify-between">
             <span className="text-xs uppercase tracking-wide text-neutral-500">
               Edit instruction
@@ -683,6 +892,8 @@ export function TransformTab({
               cleaner animation but the explanation no longer starts
               from the literal exam frame the student remembers.
             </p>
+          )}
+          </>
           )}
 
           {latestUrl && (

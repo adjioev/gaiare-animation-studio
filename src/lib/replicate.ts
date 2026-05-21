@@ -205,3 +205,86 @@ export async function runFluxKontext(
   }
   return final.output as string;
 }
+
+// ─── Image enhance (SeedVR2 upscale + Clarity polish) ──────────────────
+//
+// Pinned model versions mirror the Rails mastra pipeline
+// (apps/mastra-agents/src/lib/replicate.ts MODEL_VERSIONS) so the studio
+// produces output identical to the server enhance. Pinned here in TS —
+// bumping a version is a one-line change; the Rust proxy only validates
+// the hash shape (64 hex chars), not the specific value.
+
+export const SEEDVR2_VERSION =
+  "ca98249be9cb623f02a80a7851a2b1a33d5104c251a8f5a1588f251f79bf7c78";
+export const CLARITY_VERSION =
+  "dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e";
+
+/** Replicate output is sometimes a bare URL, sometimes a one-element
+ *  array — normalise to the first string URL. */
+function firstOutputUrl(output: unknown): string {
+  const url = Array.isArray(output) ? output[0] : output;
+  if (typeof url !== "string" || !url) {
+    throw new Error("Replicate returned no output URL");
+  }
+  return url;
+}
+
+/** SeedVR2 7b — content-preserving super-resolution upscale. `imageUrl`
+ *  must be an HTTPS URL Replicate can fetch. Inputs match the mastra
+ *  pipeline exactly. Returns the upscaled image URL. */
+export async function runSeedVR2(
+  imageUrl: string,
+  opts: { signal?: AbortSignal; onTick?: (p: Prediction<string>) => void } = {},
+): Promise<string> {
+  const started = await invoke<unknown>(
+    "replicate_create_prediction_by_version",
+    {
+      version: SEEDVR2_VERSION,
+      input: {
+        media: imageUrl,
+        model_variant: "7b",
+        cfg_scale: 1,
+        sample_steps: 1,
+        apply_color_fix: true,
+        output_format: "png",
+        output_quality: 100,
+      },
+    },
+  );
+  if (!isValidPrediction(started)) {
+    throw new Error("Replicate returned an unexpected response shape");
+  }
+  const final = await pollPrediction(started as Prediction<string>, {
+    signal: opts.signal,
+    onTick: opts.onTick,
+  });
+  if (final.status !== "succeeded") {
+    throw new Error(`SeedVR2 failed: ${final.error ?? final.status}`);
+  }
+  return firstOutputUrl(final.output);
+}
+
+/** Clarity Upscaler — fine-detail polish pass. Returns the polished URL. */
+export async function runClarity(
+  imageUrl: string,
+  opts: { signal?: AbortSignal; onTick?: (p: Prediction<string>) => void } = {},
+): Promise<string> {
+  const started = await invoke<unknown>(
+    "replicate_create_prediction_by_version",
+    {
+      version: CLARITY_VERSION,
+      input: { image: imageUrl },
+    },
+  );
+  if (!isValidPrediction(started)) {
+    throw new Error("Replicate returned an unexpected response shape");
+  }
+  const final = await pollPrediction(started as Prediction<string>, {
+    signal: opts.signal,
+    onTick: opts.onTick,
+  });
+  if (final.status !== "succeeded") {
+    throw new Error(`Clarity failed: ${final.error ?? final.status}`);
+  }
+  return firstOutputUrl(final.output);
+}

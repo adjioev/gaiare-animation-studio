@@ -43,6 +43,7 @@ export type AssetKind = "image" | "video";
 export type AssetOriginKind =
   | "uploaded"
   | "transform"
+  | "enhance"
   | "extract"
   | "generate"
   | "trim"
@@ -58,10 +59,10 @@ export type Asset = {
   durationSec?: number;
   /** Provenance — added 2026. Old assets backfill to `"uploaded"`. */
   originKind?: AssetOriginKind;
-  /** Which image model produced a transform. `"flux"` = Flux Kontext
-   *  (single-image edit), `"gemini"` = Gemini multi-image (sign fix with
-   *  reference signs). Absent on non-transform / legacy assets. */
-  engine?: "flux" | "gemini";
+  /** Which model produced this asset. `"flux"` = Flux Kontext edit,
+   *  `"gemini"` = Gemini sign-fix, `"seedvr2"` = SeedVR2 upscale,
+   *  `"clarity"` = Clarity polish. Absent on uploaded / legacy assets. */
+  engine?: "flux" | "gemini" | "seedvr2" | "clarity";
   /** Canonical, Rails-sourced images — protected ("locked") from
    *  deletion. `source` = the original exam image (the default anchor);
    *  `enhanced` / `enhanced_safe` = the super-res variants. Any set role
