@@ -8,23 +8,46 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: "OS to build (manual runs only)"
+        type: choice
+        default: both
+        options: [both, windows, macos]
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  # Build the matrix dynamically so a manual run can target a single OS — e.g.
+  # Windows-only, to avoid burning the 10× macOS minutes when the mac build was
+  # made locally. Tag pushes (and the "both" default) build every target.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        shell: bash
+        run: |
+          want="${{ github.event_name == 'workflow_dispatch' && inputs.platform || 'both' }}"
+          mac='{"platform":"macos-latest","target":"aarch64-apple-darwin"}'
+          win='{"platform":"windows-latest","target":"x86_64-pc-windows-msvc"}'
+          case "$want" in
+            windows) include="[$win]" ;;
+            macos)   include="[$mac]" ;;
+            *)       include="[$mac,$win]" ;;
+          esac
+          echo "value={\"include\":$include}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: setup
     permissions:
       contents: write # tauri-action creates/updates the GitHub Release
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest # Apple Silicon (arm64) → .dmg
-            target: aarch64-apple-darwin
-          - platform: windows-latest # x64 → .msi / .exe
-            target: x86_64-pc-windows-msvc
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
