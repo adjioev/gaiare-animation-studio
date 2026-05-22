@@ -43,6 +43,33 @@ Watch it under the repo's **Actions** tab (~10–20 min).
 2. Download the installer for your OS and do a quick smoke test: it installs, launches, and a workspace + an API-key-backed action (e.g. a Replicate edit) works after entering keys in Settings.
 3. Edit the release notes if needed, then **Publish**. Designers download from the Releases page.
 
+## Installing an unsigned build (for designers)
+
+The builds aren't code-signed (see EPIC-12.3), so the OS shows a one-time scary
+warning on first launch. It's harmless — paste these steps into the release notes
+so designers can get past it. **You only do this once per install.**
+
+### macOS (`.dmg`)
+
+1. Open the `.dmg` and drag **Gaiare Animation Studio** into **Applications**.
+2. Double-clicking it the first time fails with *"can't be opened because Apple
+   cannot check it for malicious software"* — that's expected.
+3. Open **System Settings → Privacy & Security**, scroll down to the message
+   *"Gaiare Animation Studio was blocked…"*, and click **Open Anyway** →
+   **Open**.
+   - On older macOS you can instead **right-click the app → Open → Open**.
+4. It launches normally from then on.
+
+### Windows (`.msi` / `.exe`)
+
+1. Run the installer. Windows SmartScreen shows *"Windows protected your PC"*.
+2. Click **More info → Run anyway**, then continue the install.
+3. The installed app launches normally afterwards.
+
+> If first launch still misbehaves on macOS (repeated keychain prompts, lost API
+> keys), that's the unsigned-build keychain quirk — the fix is to sign the macOS
+> build (EPIC-12.3), not a per-user workaround.
+
 ## Build without releasing (testing)
 
 Use the **workflow_dispatch** trigger: repo → Actions → *Release* → *Run workflow*. It builds the same installers and uploads them as **run artifacts** (no Release is created). Good for verifying a build off a non-tag commit.
@@ -70,7 +97,7 @@ Then fix forward and cut a new patch (`pnpm release patch`). Don't reuse a versi
 
 - **macOS build is Apple Silicon (arm64) only.** It won't run on Intel Macs. Add an `x86_64-apple-darwin` matrix row (and pin its ffmpeg SHA) when needed — see EPIC-12.
 - **Windows ffmpeg SHA is not pinned yet** (bootstrap mode in `scripts/download-ffmpeg.mjs`). Capture the printed SHA and commit it into `TARGETS["win32-x64"].expected` so Windows builds are verified.
-- **Builds are unsigned** until code signing is wired (EPIC-12.3). Users will see Gatekeeper ("unidentified developer") on macOS and SmartScreen on Windows. Signing/notarization secrets plug into the commented `env:` block in `release.yml`.
+- **Builds are unsigned** until code signing is wired (EPIC-12.3). Users see Gatekeeper ("unidentified developer") on macOS and SmartScreen on Windows on first launch — see [Installing an unsigned build](#installing-an-unsigned-build-for-designers) for the one-time bypass. Signing/notarization secrets plug into the commented `env:` block in `release.yml`.
 
 ## Troubleshooting
 
