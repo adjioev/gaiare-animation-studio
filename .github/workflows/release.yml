@@ -1,0 +1,83 @@
+name: Release
+
+# Cut a release by pushing a version tag (use `pnpm release …` which bumps the
+# manifests, commits, and tags). The tag push builds installers on macOS +
+# Windows and attaches them to a DRAFT GitHub Release for review before publish.
+# `workflow_dispatch` builds the same artifacts on demand without a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    permissions:
+      contents: write # tauri-action creates/updates the GitHub Release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest # Apple Silicon (arm64) → .dmg
+            target: aarch64-apple-darwin
+          - platform: windows-latest # x64 → .msi / .exe
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - run: pnpm install
+
+      # tauri build runs `beforeBuildCommand` (pnpm build → prebuild fetches the
+      # ffmpeg/ffprobe sidecars for this target, then tsc + vite), then cargo.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- Code signing (EPIC-12.3) — wire these secrets to ship signed,
+          # notarized builds without Gatekeeper/SmartScreen warnings. Unset =
+          # unsigned build (installs with a warning). ---
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          # Tag push → draft Release named "Studio vX.Y.Z" with installers.
+          # Dispatch (no tag) → empty tagName: build only, no Release.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: ${{ github.ref_type == 'tag' && 'Studio __VERSION__' || '' }}
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
+      # On manual dispatch there's no Release — keep the bundles as run artifacts.
+      - if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-${{ matrix.target }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+          if-no-files-found: warn
