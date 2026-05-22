@@ -154,6 +154,7 @@ export async function submitArtifact(args: {
   kind: "enhanced_image" | "video";
   filePath: string;
   note?: string;
+  jobId?: number;
 }): Promise<StudioSubmission> {
   const res = await invoke<{ data: StudioSubmission }>("rails_submit_artifact", {
     serverUrl: args.serverUrl,
@@ -161,6 +162,49 @@ export async function submitArtifact(args: {
     kind: args.kind,
     filePath: args.filePath,
     note: args.note ?? null,
+    jobId: args.jobId ?? null,
+  });
+  return res.data;
+}
+
+/** A unit of artwork work an admin requested. Designers pull these from the
+ *  shared queue, claim one, and deliver via submitArtifact (with jobId). */
+export type StudioJob = {
+  id: number;
+  question_id: number;
+  question_external_ref: string;
+  question_image_url: string | null;
+  brief: string | null;
+  status: string;
+};
+
+/** The shared work queue: "open" (claimable) or "mine" (claimed by me). */
+export async function listJobs(
+  serverUrl: string,
+  status: "open" | "mine",
+): Promise<StudioJob[]> {
+  const res = await invoke<{ data: StudioJob[] }>("rails_list_jobs", {
+    serverUrl,
+    query: { status },
+  });
+  return res.data;
+}
+
+/** Claim an open job. Throws a RailsError on a race (Rails replies 409 when the
+ *  job was just taken); the caller refreshes the queue to drop it. */
+export async function claimJob(serverUrl: string, id: number): Promise<StudioJob> {
+  const res = await invoke<{ data: StudioJob }>("rails_claim_job", {
+    serverUrl,
+    id: String(id),
+  });
+  return res.data;
+}
+
+/** Release a claimed job back to the queue. */
+export async function releaseJob(serverUrl: string, id: number): Promise<StudioJob> {
+  const res = await invoke<{ data: StudioJob }>("rails_release_job", {
+    serverUrl,
+    id: String(id),
   });
   return res.data;
 }

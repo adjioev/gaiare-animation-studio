@@ -181,6 +181,28 @@ async fn api_get(server_url: &str, path: &str, query: Option<&Value>) -> Result<
     ))
 }
 
+/// Bodyless authenticated POST (e.g. claim/release). Returns the JSON body on
+/// success; maps non-2xx (incl. 409 claim conflicts) to a RailsError.
+async fn api_post(server_url: &str, path: &str) -> Result<Value, RailsError> {
+    validate_server(server_url)?;
+    let token = token_for(server_url)?;
+
+    let res = client()
+        .post(endpoint(server_url, path))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await?;
+    let status = res.status();
+    if status.is_success() {
+        return Ok(res.json::<Value>().await?);
+    }
+    let body = res.text().await.unwrap_or_default();
+    Err(RailsError::new(
+        map_status(status),
+        format!("Rails {status}: {}", body.chars().take(300).collect::<String>()),
+    ))
+}
+
 /// Validate a freshly-pasted token against the server, then store it in
 /// the keychain. Returns the countries payload (so JS can confirm the
 /// connection is live). Never persists the token if validation fails.
@@ -275,6 +297,27 @@ pub async fn rails_list_submissions(
     api_get(&server_url, &path, None).await
 }
 
+/// The shared work queue (`status`: "open" | "mine").
+#[tauri::command]
+pub async fn rails_list_jobs(server_url: String, query: Value) -> Result<Value, RailsError> {
+    api_get(&server_url, "api/v1/studio/jobs", Some(&query)).await
+}
+
+/// Claim an open job. A 409 (job already claimed by someone else) surfaces as a
+/// RailsError, which the UI turns into a "just taken" notice + queue refresh.
+#[tauri::command]
+pub async fn rails_claim_job(server_url: String, id: String) -> Result<Value, RailsError> {
+    let path = format!("api/v1/studio/jobs/{id}/claim");
+    api_post(&server_url, &path).await
+}
+
+/// Release a claimed job back to the queue.
+#[tauri::command]
+pub async fn rails_release_job(server_url: String, id: String) -> Result<Value, RailsError> {
+    let path = format!("api/v1/studio/jobs/{id}/release");
+    api_post(&server_url, &path).await
+}
+
 /// Mirror the Rails endpoint's 20 MB cap so we fail before slurping a huge
 /// file into memory.
 const MAX_SUBMIT_BYTES: u64 = 20 * 1024 * 1024;
@@ -300,6 +343,7 @@ pub async fn rails_submit_artifact(
     kind: String,
     file_path: String,
     note: Option<String>,
+    job_id: Option<i64>,
 ) -> Result<Value, RailsError> {
     validate_server(&server_url)?;
     let token = token_for(&server_url)?;
@@ -355,6 +399,9 @@ pub async fn rails_submit_artifact(
         if !note.is_empty() {
             form = form.text("note", note);
         }
+    }
+    if let Some(job_id) = job_id {
+        form = form.text("job_id", job_id.to_string());
     }
 
     let path = format!("api/v1/studio/questions/{question_id}/submissions");

@@ -33,6 +33,8 @@ export type UploadItem = {
   externalRef: string;
   folderName: string;
   filename: string;
+  // The queue job this asset fulfils, if the workspace was opened from one.
+  jobId?: number;
 };
 
 const UPLOAD_STATUS_ICON: Record<UploadStatus, string> = {

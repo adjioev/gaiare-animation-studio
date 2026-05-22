@@ -17,9 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gemini::{gemini_generate_image, rasterize_svg};
 use llm::fireworks_chat;
 use rails::{
-    rails_connect, rails_disconnect, rails_get_question, rails_is_connected,
-    rails_list_countries, rails_list_questions, rails_list_submissions,
-    rails_submit_artifact,
+    rails_claim_job, rails_connect, rails_disconnect, rails_get_question, rails_is_connected,
+    rails_list_countries, rails_list_jobs, rails_list_questions, rails_list_submissions,
+    rails_release_job, rails_submit_artifact,
 };
 use replicate::{
     replicate_cancel_prediction, replicate_create_prediction,
@@ -272,6 +272,9 @@ pub fn run() {
             rails_list_countries,
             rails_list_submissions,
             rails_submit_artifact,
+            rails_list_jobs,
+            rails_claim_job,
+            rails_release_job,
             arm_quit,
             force_quit,
             cancel_quit,

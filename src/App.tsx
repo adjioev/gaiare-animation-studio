@@ -65,8 +65,10 @@ import {
   isRailsConnected,
   listSubmissions,
   submitArtifact,
+  type StudioJob,
   type StudioSubmission,
 } from "./lib/rails";
+import { JobsPanel } from "./components/JobsPanel";
 
 const DEFAULT_EXTERNAL_REF = "14";
 const DEFAULT_SOURCE_URL =
@@ -109,6 +111,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
+  const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
   /** ID of the asset shown in the inspect viewer, or null if the
    *  viewer is closed. Kept on App rather than per-card local state so
    *  Esc / backdrop dismiss + keyboard navigation can be wired
@@ -602,12 +605,23 @@ function App() {
     setNewWorkspaceOpen(true);
   }
 
+  // Open the workspace for a claimed queue job (links railsQuestionId + jobId).
+  async function openJob(job: StudioJob) {
+    await createWorkspaceFromModal({
+      externalRef: job.question_external_ref,
+      sourceUrl: job.question_image_url ?? "",
+      questionId: job.question_id,
+      jobId: job.id,
+    });
+  }
+
   async function createWorkspaceFromModal(args: {
     externalRef: string;
     sourceUrl: string;
     enhancedUrl?: string;
     enhancedSafeUrl?: string;
     questionId?: number;
+    jobId?: number;
   }) {
     clearWarnings();
     // Unified open: load the existing workspace (preserving prior work)
@@ -647,6 +661,10 @@ function App() {
     // (the submissions endpoint is keyed by DB id, not external_ref).
     if (args.questionId != null) {
       ws = { ...ws, railsQuestionId: args.questionId };
+    }
+    // Opened from the queue → remember the job so submit ties back to it.
+    if (args.jobId != null) {
+      ws = { ...ws, jobId: args.jobId };
     }
     // Pull the question's correct signs from Rails (detail endpoint) so
     // sign-fix can auto-load references. Best-effort: skipped if not
@@ -849,6 +867,7 @@ function App() {
       externalRef: workspace.externalRef,
       folderName,
       filename: a.filename,
+      jobId: workspace.jobId,
     };
     setUploadQueue((q) => {
       const existing = q.find((i) => i.assetId === id);
@@ -893,6 +912,7 @@ function App() {
           questionId: next.questionId,
           kind: next.kind,
           filePath: abs,
+          jobId: next.jobId,
         });
         finish({ status: "done" });
         void refreshSubmissions(next.questionId);
@@ -1508,6 +1528,11 @@ function App() {
             <Button variant="secondary" onClick={newWorkspace}>
               + New
             </Button>
+            {settings.railsServer && (
+              <Button variant="secondary" onClick={() => setJobsPanelOpen(true)}>
+                Queue
+              </Button>
+            )}
             <button
               onClick={() => setSettingsOpen(true)}
               title="Settings"
@@ -1737,6 +1762,15 @@ function App() {
             setNewWorkspaceOpen(false);
             setSettingsOpen(true);
           }}
+        />
+      )}
+
+      {settings.railsServer && (
+        <JobsPanel
+          serverUrl={settings.railsServer.url}
+          open={jobsPanelOpen}
+          onClose={() => setJobsPanelOpen(false)}
+          onOpenJob={openJob}
         />
       )}
 

@@ -204,6 +204,9 @@ export type Workspace = {
    *  endpoint is keyed by DB id). Absent on workspaces created/opened
    *  before this field, or by manual entry — re-open from Rails to set it. */
   railsQuestionId?: number;
+  /** The studio job this workspace was opened to fulfil (when opened from the
+   *  queue). Passed back on submit so Rails ties the proposal to the job. */
+  jobId?: number;
   updatedAt: number;
 };
 
