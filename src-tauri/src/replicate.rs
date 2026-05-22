@@ -63,19 +63,10 @@ impl From<reqwest::Error> for ReplicateError {
     }
 }
 
-impl From<std::env::VarError> for ReplicateError {
-    fn from(err: std::env::VarError) -> Self {
-        Self {
-            message: format!(
-                "REPLICATE_API_TOKEN missing from env ({err}). \
-                 Set it in the .env file the Rust process reads on startup."
-            ),
-        }
-    }
-}
-
 fn token() -> Result<String, ReplicateError> {
-    Ok(std::env::var("REPLICATE_API_TOKEN")?)
+    crate::secrets::get_secret(crate::secrets::SecretId::Replicate).ok_or_else(|| ReplicateError {
+        message: "Replicate API key not set — add it in Settings → API Keys".into(),
+    })
 }
 
 fn client() -> reqwest::Client {

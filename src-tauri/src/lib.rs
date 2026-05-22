@@ -9,6 +9,7 @@ mod llm;
 mod rails;
 mod replicate;
 mod safe_path;
+mod secrets;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -26,6 +27,7 @@ use replicate::{
     replicate_create_prediction_by_version, replicate_get_prediction, replicate_upload_file,
 };
 use safe_path::assert_safe_document_path_cmd;
+use secrets::{clear_secret, secret_status, set_secret};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::Emitter;
 
@@ -275,6 +277,9 @@ pub fn run() {
             rails_list_jobs,
             rails_claim_job,
             rails_release_job,
+            set_secret,
+            clear_secret,
+            secret_status,
             arm_quit,
             force_quit,
             cancel_quit,

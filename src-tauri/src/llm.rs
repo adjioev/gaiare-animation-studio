@@ -41,19 +41,10 @@ impl From<reqwest::Error> for LlmError {
     }
 }
 
-impl From<std::env::VarError> for LlmError {
-    fn from(err: std::env::VarError) -> Self {
-        Self {
-            message: format!(
-                "FIREWORKS_API_KEY missing from env ({err}). \
-                 Set it in the .env file the Rust process reads on startup."
-            ),
-        }
-    }
-}
-
 fn token() -> Result<String, LlmError> {
-    Ok(std::env::var("FIREWORKS_API_KEY")?)
+    crate::secrets::get_secret(crate::secrets::SecretId::Fireworks).ok_or_else(|| LlmError {
+        message: "Fireworks API key not set — add it in Settings → API Keys".into(),
+    })
 }
 
 fn client() -> reqwest::Client {

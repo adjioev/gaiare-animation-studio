@@ -11,6 +11,13 @@ import {
 } from "../lib/settings";
 import { Button, Field, errorMessage, inputCls } from "./ui";
 import { DEFAULT_RAILS_URL, connectRails, disconnectRails } from "../lib/rails";
+import {
+  SECRET_FIELDS,
+  clearSecret,
+  secretStatus,
+  setSecret,
+  type SecretKey,
+} from "../lib/secrets";
 
 export function SettingsModal({
   initial,
@@ -29,6 +36,7 @@ export function SettingsModal({
   const [contractorId, setContractorId] = useState(initial.contractorId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"general" | "keys">("general");
 
   // Rails connection (paste-token). The token goes straight to the Rust
   // keychain via connectRails — it's never kept in component state beyond
@@ -42,6 +50,65 @@ export function SettingsModal({
   const [tokenInput, setTokenInput] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [connError, setConnError] = useState<string | null>(null);
+
+  // API keys (Replicate / Gemini / Fireworks) — stored in the OS keychain via
+  // the Rust commands; the value never round-trips back to JS, only set/not-set.
+  const [keyStatus, setKeyStatus] = useState<Record<SecretKey, boolean>>({
+    replicate: false,
+    gemini: false,
+    fireworks: false,
+  });
+  const [keyInputs, setKeyInputs] = useState<Record<SecretKey, string>>({
+    replicate: "",
+    gemini: "",
+    fireworks: "",
+  });
+  const [keyBusy, setKeyBusy] = useState<SecretKey | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        SECRET_FIELDS.map(async (f) => [f.key, await secretStatus(f.key)] as const),
+      );
+      if (!cancelled) {
+        setKeyStatus(Object.fromEntries(entries) as Record<SecretKey, boolean>);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveKey(key: SecretKey) {
+    const value = keyInputs[key].trim();
+    if (!value) return;
+    setKeyBusy(key);
+    setKeyError(null);
+    try {
+      await setSecret(key, value);
+      setKeyInputs((s) => ({ ...s, [key]: "" }));
+      setKeyStatus((s) => ({ ...s, [key]: true }));
+    } catch (e) {
+      setKeyError(errorMessage(e));
+    } finally {
+      setKeyBusy(null);
+    }
+  }
+
+  async function clearKey(key: SecretKey) {
+    setKeyBusy(key);
+    setKeyError(null);
+    try {
+      await clearSecret(key);
+      setKeyStatus((s) => ({ ...s, [key]: false }));
+    } catch (e) {
+      setKeyError(errorMessage(e));
+    } finally {
+      setKeyBusy(null);
+    }
+  }
 
   async function connect() {
     const url = serverUrl.trim().replace(/\/+$/, "");
@@ -130,7 +197,25 @@ export function SettingsModal({
           </button>
         </header>
 
+        <nav className="mb-4 flex gap-1 border-b border-neutral-800">
+          {([["general", "General"], ["keys", "API keys"]] as const).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={`-mb-px border-b-2 px-3 py-1.5 text-sm ${
+                tab === id
+                  ? "border-white text-white"
+                  : "border-transparent text-neutral-400 hover:text-neutral-200"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
         <section className="space-y-3">
+          {tab === "general" && (
+          <>
           <Field
             label="Workspace folder"
             hint={`Under ~/Documents · default "${DEFAULT_FOLDER_NAME}"`}
@@ -234,6 +319,62 @@ export function SettingsModal({
               plain text. Generate one in Rails admin → API tokens.
             </p>
           </div>
+          </>
+          )}
+
+          {tab === "keys" && (
+          <div>
+            <p className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+              API keys
+            </p>
+            <div className="space-y-3">
+              {SECRET_FIELDS.map((f) => (
+                <div key={f.key}>
+                  <Field label={f.label} hint={f.hint}>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={keyInputs[f.key]}
+                        onChange={(e) =>
+                          setKeyInputs((s) => ({ ...s, [f.key]: e.currentTarget.value }))
+                        }
+                        placeholder={keyStatus[f.key] ? "•••••• (paste to replace)" : f.placeholder}
+                        className={inputCls}
+                      />
+                      <Button
+                        onClick={() => saveKey(f.key)}
+                        disabled={keyBusy === f.key || !keyInputs[f.key].trim()}
+                      >
+                        {keyBusy === f.key ? "…" : "Save"}
+                      </Button>
+                    </div>
+                  </Field>
+                  <div className="mt-1 flex items-center gap-2 text-[11px]">
+                    {keyStatus[f.key] ? (
+                      <>
+                        <span className="text-emerald-400">✓ set</span>
+                        <button
+                          onClick={() => clearKey(f.key)}
+                          disabled={keyBusy === f.key}
+                          className="text-neutral-500 hover:text-rose-300 disabled:opacity-50"
+                        >
+                          clear
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-neutral-500">not set</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {keyError && <p className="mt-2 text-xs text-rose-300">⚠ {keyError}</p>}
+            <p className="mt-2 text-[11px] text-neutral-500">
+              Stored in your OS keychain — never bundled in the app or written to
+              disk in plain text.
+            </p>
+          </div>
+          )}
         </section>
 
         <footer className="mt-6 flex items-center justify-end gap-3">

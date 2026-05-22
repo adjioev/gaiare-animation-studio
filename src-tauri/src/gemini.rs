@@ -107,11 +107,8 @@ impl From<reqwest::Error> for GeminiError {
 }
 
 fn api_key() -> Result<String, GeminiError> {
-    std::env::var("GOOGLE_GENERATIVE_AI_API_KEY").map_err(|e| GeminiError {
-        message: format!(
-            "GOOGLE_GENERATIVE_AI_API_KEY missing from env ({e}). \
-             Add it to the .env the Rust process reads on startup."
-        ),
+    crate::secrets::get_secret(crate::secrets::SecretId::Gemini).ok_or_else(|| GeminiError {
+        message: "Gemini API key not set — add it in Settings → API Keys".into(),
     })
 }
 
