@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gaiare-animation-studio",
+  "productName": "Gaiare Studio",
   "version": "0.1.0",
   "identifier": "com.adjioev.gaiare-animation-studio",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "gaiare-animation-studio",
+        "title": "Gaiare Studio",
         "width": 1100,
         "height": 800
       }
