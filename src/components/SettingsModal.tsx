@@ -335,9 +335,13 @@ export function SettingsModal({
                       <input
                         type="password"
                         value={keyInputs[f.key]}
-                        onChange={(e) =>
-                          setKeyInputs((s) => ({ ...s, [f.key]: e.currentTarget.value }))
-                        }
+                        onChange={(e) => {
+                          // Read the value synchronously: React nulls out
+                          // e.currentTarget once the handler returns, and the
+                          // setKeyInputs updater below runs after that.
+                          const value = e.currentTarget.value;
+                          setKeyInputs((s) => ({ ...s, [f.key]: value }));
+                        }}
                         placeholder={keyStatus[f.key] ? "•••••• (paste to replace)" : f.placeholder}
                         className={inputCls}
                       />
