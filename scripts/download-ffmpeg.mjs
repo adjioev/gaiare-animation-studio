@@ -22,11 +22,11 @@
 
 import {
   chmodSync,
+  copyFileSync,
   createReadStream,
   existsSync,
   mkdirSync,
   readdirSync,
-  renameSync,
   rmSync,
 } from "node:fs";
 import { execSync } from "node:child_process";
@@ -224,7 +224,10 @@ async function placeBinary(url, archiveType, binaryName, outPath, expected) {
     throw new Error(`Couldn't locate ${binaryName} inside ${archivePath}`);
   }
   await verifyOrThrow(candidate, expected, binaryName);
-  renameSync(candidate, outPath);
+  // copy, not rename: on the Windows CI runner the temp dir (C:) and the repo
+  // (D:) are different volumes and renameSync fails with EXDEV. The temp dir is
+  // cleaned up in the finally block, so leaving the source behind is fine.
+  copyFileSync(candidate, outPath);
   if (platform() !== "win32") chmodSync(outPath, 0o755);
 }
 
@@ -250,8 +253,10 @@ try {
     }
     await verifyOrThrow(ffmpegSrc, target.expected.ffmpeg, "ffmpeg");
     await verifyOrThrow(ffprobeSrc, target.expected.ffprobe, "ffprobe");
-    renameSync(ffmpegSrc, ffmpegOut);
-    renameSync(ffprobeSrc, ffprobeOut);
+    // copy, not rename — temp dir and repo can be on different volumes on the
+    // Windows CI runner (EXDEV on rename). Temp is removed in finally.
+    copyFileSync(ffmpegSrc, ffmpegOut);
+    copyFileSync(ffprobeSrc, ffprobeOut);
     if (platform() !== "win32") {
       chmodSync(ffmpegOut, 0o755);
       chmodSync(ffprobeOut, 0o755);
