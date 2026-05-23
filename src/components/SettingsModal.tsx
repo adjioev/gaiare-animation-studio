@@ -82,7 +82,7 @@ export function SettingsModal({
   }
 
   async function installUpdate() {
-    if (!aboutUpdate) return;
+    if (!aboutUpdate || updateCheck === "downloading") return;
     setUpdateCheck("downloading");
     setAboutError(null);
     try {
@@ -449,9 +449,11 @@ export function SettingsModal({
             </div>
 
             <div className="mt-3 flex items-center gap-3">
-              {updateCheck === "available" ? (
+              {/* Offer install while an update is pending — including after a
+                  failed download, so the user can retry without re-checking. */}
+              {aboutUpdate && (updateCheck === "available" || updateCheck === "error") ? (
                 <Button onClick={installUpdate}>
-                  Update to v{aboutUpdate?.version} &amp; Restart
+                  {updateCheck === "error" ? "Retry" : "Update"} to v{aboutUpdate.version} &amp; Restart
                 </Button>
               ) : (
                 <Button

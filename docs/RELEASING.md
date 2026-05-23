@@ -107,6 +107,8 @@ git tag -d v0.2.0                  # remove the local tag
 ```
 Then fix forward and cut a new patch (`pnpm release patch`). Don't reuse a version number.
 
+> **Updater note:** deleting a published Release repoints the `latest.json` feed to the previous version. The updater never *downgrades*, so apps already on the bad version won't roll back on their own — they sit tight until you publish a higher version. Prefer fixing forward with a new patch over deleting a release designers may already be running.
+
 ## Known limitations / TODO
 
 - **macOS build is Apple Silicon (arm64) only.** It won't run on Intel Macs. Add an `x86_64-apple-darwin` matrix row (and pin its ffmpeg SHA) when needed — see EPIC-12.

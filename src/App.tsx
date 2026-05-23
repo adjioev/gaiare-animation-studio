@@ -145,7 +145,7 @@ function App() {
   }, []);
 
   async function applyUpdate() {
-    if (!availableUpdate) return;
+    if (!availableUpdate || updateState === "downloading") return;
     setUpdateState("downloading");
     setUpdateError(null);
     try {

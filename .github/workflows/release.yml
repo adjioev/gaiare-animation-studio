@@ -47,6 +47,13 @@ jobs:
       contents: write # tauri-action creates/updates the GitHub Release
     strategy:
       fail-fast: false
+      # Serialize the platforms: tauri-action merges each build's entry into
+      # the release's single `latest.json` via read-modify-write, which is
+      # only safe sequentially. Run in parallel and the second upload races
+      # the first — the published feed can end up missing one OS, so that
+      # platform silently never sees updates. Costs wall-clock time on
+      # release builds (rare) in exchange for a correct updater feed.
+      max-parallel: 1
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     runs-on: ${{ matrix.platform }}
     steps:
