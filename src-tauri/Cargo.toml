@@ -24,6 +24,11 @@ tauri-plugin-shell = "2"
 tauri-plugin-http = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
+# In-app auto-update: checks the GitHub Releases feed, downloads the
+# signed bundle, and installs it in place. `process` provides relaunch()
+# so we can restart into the new version without a manual reinstall.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Rust-side HTTP client for Replicate proxy commands. Reading the

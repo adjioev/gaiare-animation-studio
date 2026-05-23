@@ -59,6 +59,13 @@ import {
   type SavedPrompt,
 } from "./lib/prompt-library";
 import { Button, errorMessage, shorten } from "./components/ui";
+import { UpdateBanner, type UpdateBannerState } from "./components/UpdateBanner";
+import {
+  checkForUpdate,
+  downloadAndApply,
+  type DownloadProgress,
+  type Update,
+} from "./lib/updater";
 import { loadSettings, saveSettings, type Settings } from "./lib/settings";
 import {
   getQuestion,
@@ -110,6 +117,46 @@ function App() {
     // Mount-once reconciliation against the initial persisted settings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // In-app auto-update. A newer release found on startup surfaces a
+  // dismissible banner; clicking through downloads + relaunches in place
+  // (see lib/updater.ts) so designers never reinstall by hand.
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateBannerState>("available");
+  const [updateProgress, setUpdateProgress] = useState<DownloadProgress | null>(
+    null,
+  );
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateDismissed, setUpdateDismissed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void checkForUpdate()
+      .then((update) => {
+        if (!cancelled && update) setAvailableUpdate(update);
+      })
+      .catch((e) => {
+        // A failed check shouldn't nag the user — they can still update
+        // manually from Settings → About. Log for diagnostics only.
+        console.warn("[updater] startup check failed:", errorMessage(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function applyUpdate() {
+    if (!availableUpdate) return;
+    setUpdateState("downloading");
+    setUpdateError(null);
+    try {
+      await downloadAndApply(availableUpdate, setUpdateProgress);
+      // downloadAndApply relaunches on success, so we don't reach here.
+    } catch (e) {
+      setUpdateState("error");
+      setUpdateError(errorMessage(e));
+    }
+  }
+
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
   const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
   /** ID of the asset shown in the inspect viewer, or null if the
@@ -1730,6 +1777,17 @@ function App() {
           setSettings(updated);
         }}
       />
+
+      {availableUpdate && !updateDismissed && (
+        <UpdateBanner
+          version={availableUpdate.version}
+          state={updateState}
+          progress={updateProgress}
+          error={updateError}
+          onUpdate={applyUpdate}
+          onDismiss={() => setUpdateDismissed(true)}
+        />
+      )}
 
       {settingsOpen && (
         <SettingsModal

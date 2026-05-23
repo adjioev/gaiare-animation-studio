@@ -76,6 +76,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- Updater signing — REQUIRED for the in-app auto-updater.
+          # Without these the build is unsigned for the updater and the
+          # `latest.json` feed is not generated, so installed apps can't
+          # self-update. (This minisign key is independent of OS code
+          # signing below.) ---
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # --- Code signing (EPIC-12.3) — wire these secrets to ship signed,
           # notarized builds without Gatekeeper/SmartScreen warnings. Unset =
           # unsigned build (installs with a warning). ---

@@ -3,6 +3,7 @@
 // contractor identity) without redesigning the layout.
 
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   DEFAULT_FOLDER_NAME,
   sanitizeFolderName,
@@ -10,6 +11,13 @@ import {
   type Settings,
 } from "../lib/settings";
 import { Button, Field, errorMessage, inputCls } from "./ui";
+import {
+  checkForUpdate,
+  downloadAndApply,
+  formatBytes,
+  type DownloadProgress,
+  type Update,
+} from "../lib/updater";
 import { DEFAULT_RAILS_URL, connectRails, disconnectRails } from "../lib/rails";
 import {
   SECRET_FIELDS,
@@ -36,7 +44,55 @@ export function SettingsModal({
   const [contractorId, setContractorId] = useState(initial.contractorId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"general" | "keys">("general");
+  const [tab, setTab] = useState<"general" | "keys" | "about">("general");
+
+  // About tab — current version + manual update check. The auto-check on
+  // startup lives in App; this is the on-demand path.
+  const [appVersion, setAppVersion] = useState("");
+  const [updateCheck, setUpdateCheck] = useState<
+    "idle" | "checking" | "uptodate" | "available" | "downloading" | "error"
+  >("idle");
+  const [aboutUpdate, setAboutUpdate] = useState<Update | null>(null);
+  const [aboutProgress, setAboutProgress] = useState<DownloadProgress | null>(
+    null,
+  );
+  const [aboutError, setAboutError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
+  }, []);
+
+  async function checkUpdates() {
+    setUpdateCheck("checking");
+    setAboutError(null);
+    try {
+      const update = await checkForUpdate();
+      if (update) {
+        setAboutUpdate(update);
+        setUpdateCheck("available");
+      } else {
+        setUpdateCheck("uptodate");
+      }
+    } catch (e) {
+      setUpdateCheck("error");
+      setAboutError(errorMessage(e));
+    }
+  }
+
+  async function installUpdate() {
+    if (!aboutUpdate) return;
+    setUpdateCheck("downloading");
+    setAboutError(null);
+    try {
+      await downloadAndApply(aboutUpdate, setAboutProgress);
+      // Relaunches on success — execution doesn't return here.
+    } catch (e) {
+      setUpdateCheck("error");
+      setAboutError(errorMessage(e));
+    }
+  }
 
   // Rails connection (paste-token). The token goes straight to the Rust
   // keychain via connectRails — it's never kept in component state beyond
@@ -198,7 +254,7 @@ export function SettingsModal({
         </header>
 
         <nav className="mb-4 flex gap-1 border-b border-neutral-800">
-          {([["general", "General"], ["keys", "API keys"]] as const).map(([id, label]) => (
+          {([["general", "General"], ["keys", "API keys"], ["about", "About"]] as const).map(([id, label]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -376,6 +432,59 @@ export function SettingsModal({
             <p className="mt-2 text-[11px] text-neutral-500">
               Stored in your OS keychain — never bundled in the app or written to
               disk in plain text.
+            </p>
+          </div>
+          )}
+
+          {tab === "about" && (
+          <div>
+            <p className="mb-2 text-xs uppercase tracking-wide text-neutral-500">
+              About
+            </p>
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <span className="text-sm text-neutral-200">Gaiare Animation Studio</span>
+              <span className="text-sm text-neutral-400">
+                v{appVersion || "…"}
+              </span>
+            </div>
+
+            <div className="mt-3 flex items-center gap-3">
+              {updateCheck === "available" ? (
+                <Button onClick={installUpdate}>
+                  Update to v{aboutUpdate?.version} &amp; Restart
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  onClick={checkUpdates}
+                  disabled={updateCheck === "checking" || updateCheck === "downloading"}
+                >
+                  {updateCheck === "checking" ? "Checking…" : "Check for updates"}
+                </Button>
+              )}
+              {updateCheck === "uptodate" && (
+                <span className="text-xs text-emerald-400">
+                  ✓ You're on the latest version.
+                </span>
+              )}
+            </div>
+
+            {updateCheck === "downloading" && (
+              <p className="mt-3 text-xs text-amber-200">
+                {aboutProgress && aboutProgress.total
+                  ? `Downloading… ${formatBytes(aboutProgress.downloaded)} / ${formatBytes(aboutProgress.total)}`
+                  : "Downloading…"}{" "}
+                The app will restart when it's done.
+              </p>
+            )}
+
+            {aboutError && (
+              <p className="mt-3 text-xs text-rose-300">⚠ {aboutError}</p>
+            )}
+
+            <p className="mt-4 text-[11px] text-neutral-500">
+              Updates download from GitHub Releases and install in place — no
+              reinstall. The app also checks automatically on launch.
             </p>
           </div>
           )}
