@@ -17,6 +17,12 @@ dist-ssr
 .env.*
 !.env.example
 
+# Tauri updater signing keys — the private key is delivered to the
+# maintainer to store as a GitHub Actions secret, never committed. The
+# public key lives (committed) inside src-tauri/tauri.conf.json instead.
+gaiare-updater.key
+gaiare-updater.key.pub
+
 # Generated artefacts (kept local, S3 is source of truth)
 /work/
 /scratch/
