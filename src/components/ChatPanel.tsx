@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { BaseDirectory, readFile } from "@tauri-apps/plugin-fs";
 import {
+  buildQuestionContextBlock,
   chat,
   estimateCostUsd,
   fingerprintForContext,
@@ -28,6 +29,7 @@ import {
   type Workspace,
 } from "../lib/workspace";
 import { Button, errorMessage } from "./ui";
+import { QuestionContextPanel } from "./QuestionContextPanel";
 import { clsx } from "clsx";
 
 /** Width bounds for the resize handle. Smaller than `MIN_WIDTH` makes
@@ -213,9 +215,9 @@ export function ChatPanel({
     setInput("");
 
     try {
-      // Attach the active Generate tab's input image so the vision
-      // model can actually see what Wan will animate. Skipped for
-      // other tab kinds (no useful single image to show).
+      // Attach the active tab's input image so the vision model can see
+      // what it's working on — the Wan start frame (Generate) or the Flux
+      // edit source (Transform). Other tab kinds have no single image.
       const attachImageDataUri = await loadInputImageDataUri(
         folderName,
         workspace,
@@ -234,6 +236,15 @@ export function ChatPanel({
       const res = await chat([...historyRef.current, userMsg], {
         attachImageDataUri: attachImageDataUri ?? undefined,
         skillContext,
+        // Question context grounds ANIMATION (Wan) prompts. Skip it in the
+        // Flux image-edit context — its answer/scene/"motion" framing is
+        // irrelevant to pixel edits and would confuse the assistant into
+        // thinking it's writing a Wan prompt. The designer still sees the
+        // full context in the QuestionContextPanel regardless of tab.
+        questionContextBlock:
+          skillContext === "wan"
+            ? buildQuestionContextBlock(workspace.questionContext)
+            : undefined,
       });
       onAppendMessage({
         id: newChatMessageId(),
@@ -343,6 +354,9 @@ export function ChatPanel({
         ref={transcriptRef}
         className="flex-1 space-y-3 overflow-y-auto px-4 py-3"
       >
+        {workspace.questionContext && (
+          <QuestionContextPanel ctx={workspace.questionContext} />
+        )}
         {history.length === 0 && (
           <div className="rounded-xl border border-dashed border-neutral-800 bg-neutral-900/40 p-4 text-xs text-neutral-500">
             <p className="mb-2">
@@ -506,7 +520,16 @@ async function loadInputImageDataUri(
   workspace: Workspace,
   activeTab: PersistedTab | undefined,
 ): Promise<string | null> {
-  if (!activeTab || activeTab.kind !== "generate") return null;
+  // Generate (Wan start frame) and Transform (Flux edit source) both work
+  // on a single input image the vision model must see. flux-image-edit.md
+  // explicitly promises "the source image as a vision attachment", so
+  // Transform has to attach it too — not just Generate.
+  if (
+    !activeTab ||
+    (activeTab.kind !== "generate" && activeTab.kind !== "transform")
+  ) {
+    return null;
+  }
   const id = activeTab.inputAssetId;
   if (!id) return null;
   const asset = workspace.assets.find((a) => a.id === id);

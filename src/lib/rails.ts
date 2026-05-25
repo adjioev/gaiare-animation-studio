@@ -29,6 +29,43 @@ export type StudioQuestion = {
   /** Correct signs for the question — only on the detail (show) response,
    *  resolved from the question's visual context. */
   signs?: StudioSign[];
+  /** The correct answer's text, raw i18n hash — detail only. The Studio
+   *  picks "en" with a fallback (it has no locale concept). */
+  correct_answer?: Record<string, string> | null;
+  /** Structured explanation sections (English), no HTML — detail only.
+   *  Legacy explanations arrive as just `{ answer }`. */
+  explanation?: StudioExplanation | null;
+  /** Distilled scene dynamics from resolve + visual context — detail only.
+   *  Grounds the AI chat in who-moves-vs-who-stays for the correct answer. */
+  scene?: StudioScene | null;
+};
+
+/** Explanation sections forwarded from `explanation_i18n["en"]`. The Studio
+ *  uses only the motion-grounding sections; all optional (a question may have
+ *  only some, or — legacy — only `answer`). */
+export type StudioExplanation = {
+  answer?: string;
+  situation?: string;
+  why?: string;
+};
+
+/** Priority relationship between two actors (from resolve_context). Only the
+ *  human-readable `reason` is consumed; the payload carries more. */
+export type StudioActorRelation = { reason: string };
+
+/** What an actor must/can do (from resolve_context). `can_proceed` is the
+ *  who-moves-vs-who-stays signal; the payload carries more than this. */
+export type StudioActorObligation = {
+  actor_id: string;
+  can_proceed: boolean;
+  reason: string;
+};
+
+export type StudioScene = {
+  summary?: string | null;
+  types: string[];
+  actor_relations: StudioActorRelation[];
+  actor_obligations: StudioActorObligation[];
 };
 
 export type StudioCountry = { code: string; name: string };

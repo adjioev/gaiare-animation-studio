@@ -29,6 +29,7 @@ import {
   type AssetKind,
   type ChatMessage,
   type PersistedTab,
+  type QuestionContext,
   type Workspace,
 } from "./lib/workspace";
 import {
@@ -73,6 +74,7 @@ import {
   listSubmissions,
   submitArtifact,
   type StudioJob,
+  type StudioQuestion,
   type StudioSubmission,
 } from "./lib/rails";
 import { JobsPanel } from "./components/JobsPanel";
@@ -86,6 +88,51 @@ const DEFAULT_SOURCE_URL =
  *  q14-specific scaffold prompt that used to live here was a stand-in
  *  for the chat assistant that didn't exist yet. */
 const DEFAULT_PROMPT = "";
+
+/** Map a Rails question detail payload to the normalised QuestionContext the
+ *  workspace stores (English; snake_case → camelCase). Returns null when the
+ *  detail carries no answer/explanation/scene — so the chat seed and any UI
+ *  indicator stay off for questions that haven't been AI-processed yet. */
+function questionContextFromDetail(
+  detail: StudioQuestion,
+): QuestionContext | null {
+  const scene = detail.scene;
+  const context: QuestionContext = {
+    // Prefer English; fall back to any available locale rather than null,
+    // so a question answered only in its native locale still grounds the chat.
+    correctAnswer:
+      detail.correct_answer?.["en"] ??
+      detail.correct_answer?.["ru"] ??
+      Object.values(detail.correct_answer ?? {}).find(Boolean) ??
+      null,
+    explanation: detail.explanation
+      ? {
+          answer: detail.explanation.answer,
+          situation: detail.explanation.situation,
+          why: detail.explanation.why,
+        }
+      : null,
+    sceneSummary: scene?.summary ?? null,
+    sceneTypes: scene?.types ?? [],
+    actorRelations: (scene?.actor_relations ?? []).map((r) => ({
+      reason: r.reason,
+    })),
+    actorObligations: (scene?.actor_obligations ?? []).map((o) => ({
+      actorId: o.actor_id,
+      canProceed: o.can_proceed,
+      reason: o.reason,
+    })),
+  };
+
+  const empty =
+    !context.correctAnswer &&
+    !context.explanation &&
+    !context.sceneSummary &&
+    context.sceneTypes.length === 0 &&
+    context.actorRelations.length === 0 &&
+    context.actorObligations.length === 0;
+  return empty ? null : context;
+}
 
 function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -725,9 +772,13 @@ function App() {
         const signs = (detail.signs ?? [])
           .filter((s) => s.svg_url)
           .map((s) => ({ code: s.code, name: s.name, svgUrl: s.svg_url }));
-        ws = { ...ws, questionSigns: signs };
+        ws = {
+          ...ws,
+          questionSigns: signs,
+          questionContext: questionContextFromDetail(detail) ?? undefined,
+        };
       } catch {
-        // best-effort — leave questionSigns as-is
+        // best-effort — leave questionSigns / questionContext as-is
       }
     }
     ws = ensureAtLeastOneTab(ws);

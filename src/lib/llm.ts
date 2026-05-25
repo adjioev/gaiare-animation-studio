@@ -13,6 +13,7 @@ import fluxSkills from "../skills/flux-image-edit.md?raw";
 import type {
   ChatMessage as PersistedChatMessage,
   PersistedTab,
+  QuestionContext,
 } from "./workspace";
 
 /**
@@ -65,6 +66,73 @@ export function fingerprintForContext(ctx: SkillContext): string {
   return ctx === "flux" ? FLUX_SKILLS_FINGERPRINT : WAN_SKILLS_FINGERPRINT;
 }
 
+
+/** Soft cap for prose sections injected into the system prompt. `why` and
+ *  `situation` can be paragraph-length; the standing context is resent every
+ *  turn (Fireworks is stateless) and a thinking model deliberates over all of
+ *  it, so capping keeps both token cost and latency down. Cuts on a word
+ *  boundary near the limit and appends an ellipsis. */
+function capSection(text: string, limit = 400): string {
+  if (text.length <= limit) return text;
+  const slice = text.slice(0, limit);
+  const lastSpace = slice.lastIndexOf(" ");
+  const cut = lastSpace > limit * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return cut.trimEnd() + "…";
+}
+
+/**
+ * Format the question's answer/explanation/scene context as a plain-text
+ * block to append to the system prompt. This is how the chat stops being
+ * "blind": the assistant learns the correct answer and the scene dynamics
+ * (who moves vs. who stays, from resolve `can_proceed`) before the
+ * contractor describes the animation.
+ *
+ * Appended to the SYSTEM prompt — not injected as a seed chat message — on
+ * purpose: it's workspace-level standing context, so it shouldn't show up as
+ * a bubble or distort the user/assistant turn accounting. Returns "" when
+ * there's no usable context so the caller can append unconditionally.
+ */
+export function buildQuestionContextBlock(
+  ctx: QuestionContext | null | undefined,
+): string {
+  if (!ctx) return "";
+
+  const parts: string[] = [];
+  if (ctx.correctAnswer) parts.push(`Correct answer: ${ctx.correctAnswer}`);
+
+  const exp = ctx.explanation;
+  if (exp?.answer) parts.push(`Explanation — answer: ${exp.answer}`);
+  if (exp?.situation)
+    parts.push(`Explanation — situation: ${capSection(exp.situation)}`);
+  if (exp?.why) parts.push(`Explanation — why: ${capSection(exp.why)}`);
+
+  if (ctx.sceneSummary) parts.push(`Scene: ${ctx.sceneSummary}`);
+  if (ctx.sceneTypes.length > 0) {
+    parts.push(`Scene types: ${ctx.sceneTypes.join(", ")}`);
+  }
+
+  if (ctx.actorObligations.length > 0) {
+    const lines = ctx.actorObligations.map(
+      (o) =>
+        `- ${o.actorId} ${o.canProceed ? "proceeds" : "yields / stops"}: ${o.reason}`,
+    );
+    parts.push(`Who moves vs. who stays:\n${lines.join("\n")}`);
+  }
+  if (ctx.actorRelations.length > 0) {
+    const lines = ctx.actorRelations.map((r) => `- ${r.reason}`);
+    parts.push(`Priority:\n${lines.join("\n")}`);
+  }
+
+  if (parts.length === 0) return "";
+
+  return (
+    "\n\n## Question context (from the driving-theory database)\n" +
+    "Reference — the correct answer and scene dynamics for this question. " +
+    "Use it to ground any Wan prompt you write. Do NOT propose a prompt yet — " +
+    "wait until the designer describes the motion they want.\n\n" +
+    parts.join("\n\n")
+  );
+}
 
 /** Fireworks-side message — `content` is either a string (text-only)
  *  or an array of parts (OpenAI vision format). We construct multipart
@@ -177,12 +245,25 @@ export async function chat(
      *  is in a Transform tab so the assistant knows it's writing
      *  image-edit prompts, not animation prompts. */
     skillContext?: SkillContext;
+    /** Standing question context (answer/explanation/scene) appended to the
+     *  system prompt so the assistant grounds prompts in the correct answer.
+     *  Build with `buildQuestionContextBlock`; "" / undefined is a no-op. */
+    questionContextBlock?: string;
+    /** Kimi K2.6 reasoning control (Fireworks `thinking` field). Defaults to
+     *  disabled — measured: a question with the full skills system prompt
+     *  takes ~19s with reasoning on (and `reasoning_effort:"low"` is no
+     *  better/worse) vs ~1.5s disabled. Pass `{type:"enabled",budget_tokens:N}`
+     *  (N >= 1024) to allow capped reasoning if prompt quality needs it. */
+    thinking?: { type: "disabled" } | { type: "enabled"; budget_tokens: number };
   } = {},
 ): Promise<ChatResponse> {
   const model = opts.model ?? CHAT_MODEL;
   const context = opts.skillContext ?? "wan";
   const messages: WireMessage[] = [
-    { role: "system", content: skillsForContext(context) },
+    {
+      role: "system",
+      content: skillsForContext(context) + (opts.questionContextBlock ?? ""),
+    },
     ...toWireMessages(history, opts.attachImageDataUri ?? null),
   ];
   const res = await invoke<{
@@ -205,6 +286,7 @@ export async function chat(
       // actually-generated tokens are billed.
       max_tokens: opts.maxTokens ?? 16384,
       temperature: opts.temperature ?? 0.7,
+      thinking: opts.thinking ?? { type: "disabled" },
     },
   });
   return {

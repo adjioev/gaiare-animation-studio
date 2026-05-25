@@ -68,6 +68,16 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// Kimi K2.6 reasoning control — forwarded verbatim as Fireworks'
+    /// Anthropic-compatible `thinking` field. The renderer sends
+    /// `{"type":"disabled"}` by default: with the full skills system
+    /// prompt, a question takes ~19s with reasoning on (the hidden
+    /// `<think>` trace burns >1000 completion tokens) vs ~1.5s disabled.
+    /// NOTE: `reasoning_effort:"low"` does NOT help on this model
+    /// (measured as slow or slower than the default) — disabling is the
+    /// only effective lever. Omitted → Fireworks' default (reasoning on).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -110,12 +120,15 @@ pub async fn fireworks_chat(req: ChatRequest) -> Result<ChatResponse, LlmError> 
         })?,
     );
 
-    let body = json!({
+    let mut body = json!({
         "model": req.model,
         "messages": req.messages,
         "max_tokens": req.max_tokens.unwrap_or(2048),
         "temperature": req.temperature.unwrap_or(0.7),
     });
+    if let Some(thinking) = &req.thinking {
+        body["thinking"] = thinking.clone();
+    }
 
     let res = client()
         .post(format!("{FIREWORKS_BASE}/chat/completions"))

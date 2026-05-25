@@ -174,6 +174,28 @@ export type ChatMessage = {
   createdAt: number;
 };
 
+/** Answer + explanation + scene context fetched from Rails when a question
+ *  is opened from the browser. Seeds the AI chat so the assistant grounds
+ *  prompts in the correct answer before the contractor describes the
+ *  animation. Normalised to what the Studio uses (English; snake_case →
+ *  camelCase; locale machinery dropped). */
+export type QuestionContext = {
+  correctAnswer: string | null;
+  /** Motion-grounding explanation sections: the verdict, the scene setup,
+   *  and the rule. */
+  explanation: {
+    answer?: string;
+    situation?: string;
+    why?: string;
+  } | null;
+  sceneSummary: string | null;
+  sceneTypes: string[];
+  /** Priority relationships; only the human-readable `reason` is kept. */
+  actorRelations: { reason: string }[];
+  /** Per-actor obligations; `canProceed` = who moves vs. who stays. */
+  actorObligations: { actorId: string; canProceed: boolean; reason: string }[];
+};
+
 export type Workspace = {
   version: number;
   externalRef: string;
@@ -199,6 +221,10 @@ export type Workspace = {
    *  (reference = the sign's SVG). Empty/absent when not connected or the
    *  question has no resolvable signs. */
   questionSigns?: { code: string; name: string | null; svgUrl: string }[];
+  /** Answer/explanation/scene context for the question, fetched from Rails
+   *  on open (same best-effort path as `questionSigns`). Seeds the AI chat.
+   *  Absent when not connected, opened manually, or the question lacks it. */
+  questionContext?: QuestionContext;
   /** Rails DB id of the question, captured when opened from the browser.
    *  Needed to submit artwork proposals back to Rails (the submissions
    *  endpoint is keyed by DB id). Absent on workspaces created/opened
