@@ -1,6 +1,7 @@
 //! Rails Studio API proxy.
 //!
-//! The bearer token lives in the OS keychain (macOS Keychain), never in
+//! The bearer token lives in the OS credential store (macOS Keychain /
+//! Windows Credential Manager), never in
 //! the JS bundle. JS hands the token to `rails_connect` exactly once (on
 //! paste); after that the proxy commands read it from the keychain when
 //! making requests. Mirrors the replicate.rs / llm.rs threat model: the

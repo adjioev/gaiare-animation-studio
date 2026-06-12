@@ -1,7 +1,8 @@
 //! Per-user API key storage in the OS keychain.
 //!
 //! The three secrets the binary needs (Replicate / Gemini / Fireworks) are
-//! entered once in Settings and stored in the OS keychain — never bundled in
+//! entered once in Settings and stored in the OS credential store (macOS
+//! Keychain / Windows Credential Manager) — never bundled in
 //! the binary, never written to the plaintext settings file, never returned to
 //! the JS renderer after entry. Mirrors the `rails.rs` token pattern (keychain
 //! + in-memory cache). Falls back to `std::env` so a developer's `.env` keeps
