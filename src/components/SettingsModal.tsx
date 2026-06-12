@@ -371,8 +371,9 @@ export function SettingsModal({
               <p className="mt-2 text-xs text-rose-300">⚠ {connError}</p>
             )}
             <p className="mt-2 text-[11px] text-neutral-500">
-              The token is stored in your macOS Keychain — never on disk in
-              plain text. Generate one in Rails admin → API tokens.
+              The token is stored in your OS credential store (macOS
+              Keychain / Windows Credential Manager) — never on disk in plain
+              text. Generate one in Rails admin → API tokens.
             </p>
           </div>
           </>

@@ -33,8 +33,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Rust-side HTTP client for Replicate proxy commands. Reading the
 # REPLICATE_API_TOKEN env var in the Rust process means the secret
-# never lands in the renderer's JS bundle.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+# never lands in the renderer's JS bundle. The TLS backend is selected
+# per-target below (Schannel on Windows, rustls elsewhere).
 tokio = { version = "1", features = ["time", "fs"] }
 url = "2"
 # `dotenvy` (the maintained fork of `dotenv`) picks up the same `.env`
@@ -46,14 +46,28 @@ dotenvy = "0.15"
 # production-build .env fallback paths — `dotenvy::dotenv()` alone
 # can't find `.env` from a packaged `.app` whose cwd is `/`.
 dirs = "5"
-# OS keychain for the Rails bearer token — the secret lives in the
-# macOS Keychain, never in the JS bundle or localStorage. macOS-only
-# Phase 1, so the apple-native backend is enough.
-keyring = { version = "3", features = ["apple-native"] }
+# OS keychain for the Rails bearer token — the secret lives in the OS
+# credential store (macOS Keychain / Windows Credential Manager), never
+# in the JS bundle or localStorage. The backend is selected per-target
+# below (windows-native on Windows, apple-native elsewhere).
 # Crisp SVG → PNG for sign references: resvg renders the vector at the
 # target size (no upscaling blur like the browser canvas path). Bundles
 # usvg (parser) + tiny-skia (rasteriser). `base64` encodes the PNG for
 # the JS bridge.
 resvg = "0.45"
 base64 = "0.22"
+
+# Windows: use Schannel (native-tls) so the OS cert store is trusted and
+# TLS renegotiation (which this server requests on TLS 1.2) is handled by
+# the OS stack — exactly like Edge / curl.exe. Schannel and the Windows
+# Credential Manager are OS components: no extra build deps on windows-msvc.
+[target.'cfg(windows)'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "multipart"] }
+keyring = { version = "3", features = ["windows-native"] }
+
+# macOS (and any non-Windows dev build): keep rustls — it works against the
+# production server and pulls no OpenSSL/system-TLS dependency.
+[target.'cfg(not(windows))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
+keyring = { version = "3", features = ["apple-native"] }
 
